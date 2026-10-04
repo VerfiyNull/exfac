@@ -135,6 +135,7 @@ func _process(dt: float) -> void:
 	)
 	var aim := get_global_mouse_position()
 	var shoot := Input.is_action_pressed("shoot")
+	var shoot_click := Input.is_action_just_pressed("shoot")
 	var interact := Input.is_action_just_pressed("interact")
 	var use_medkit := Input.is_action_just_pressed("use_medkit")
 	var reload := Input.is_action_just_pressed("reload")
@@ -145,7 +146,7 @@ func _process(dt: float) -> void:
 	var distract := Input.is_action_just_pressed("distract")
 	var intel_pulse := Input.is_action_just_pressed("intel_pulse")
 	var mark_flare := Input.is_action_just_pressed("mark_flare")
-	RaidSim.step_raid(world, dt, move, aim, shoot, interact, fire_rate, use_medkit, reload, sprint, equip, distract, crouch, brace, intel_pulse, mark_flare)
+	RaidSim.step_raid(world, dt, move, aim, shoot, interact, fire_rate, use_medkit, reload, sprint, equip, distract, crouch, brace, intel_pulse, mark_flare, shoot_click)
 	fire_rate = float(world["player"].get("fire_rate", fire_rate))
 	_maybe_teach_intel_after_loot()
 	if bool(world["over"]):
@@ -267,8 +268,8 @@ func _refresh_hud() -> void:
 	var armed := Items.loadout_has_weapon(world.get("loadout", {}))
 	if not armed:
 		ammo_label.text = "FISTS"
-		ammo_sub.visible = float(player.get("punch_swing", 0.0)) > 0.0
-		ammo_sub.text = "·" if ammo_sub.visible else ""
+		ammo_sub.visible = false
+		ammo_sub.text = ""
 		ammo_label.add_theme_color_override("font_color", Color(0.85, 0.88, 0.92, 1))
 	elif rch > 0.0:
 		ammo_label.text = "…"

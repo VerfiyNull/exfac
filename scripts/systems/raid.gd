@@ -260,6 +260,9 @@ const NOISE_TTL_MELEE := 0.55
 const PUNCH_RANGE := 38.0
 const PUNCH_DAMAGE := 16.0
 const PUNCH_COOLDOWN := 0.52
+const PUNCH_STAMINA_COST := 14.0
+const MELEE_STAMINA_COST := 18.0
+const PUNCH_MISS_STAMINA_COST := 8.0
 const HEAR_PUNCH_RANGE := 110.0
 const NOISE_TTL_PUNCH := 0.35
 const PUNCH_SWING_TTL := 0.18
@@ -552,7 +555,7 @@ static func can_see_actor(viewer: Dictionary, target_pos: Vector2, obstacles: Ar
 	return has_line_of_sight(from, target_pos, obstacles)
 
 
-static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Vector2, shoot: bool, interact: bool, fire_rate: float, use_medkit: bool = false, reload: bool = false, sprint: bool = false, equip: bool = false, distract: bool = false, crouch: bool = false, brace: bool = false, intel_pulse: bool = false, mark_flare: bool = false) -> void:
+static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Vector2, shoot: bool, interact: bool, fire_rate: float, use_medkit: bool = false, reload: bool = false, sprint: bool = false, equip: bool = false, distract: bool = false, crouch: bool = false, brace: bool = false, intel_pulse: bool = false, mark_flare: bool = false, shoot_click: bool = false) -> void:
 	if bool(world["over"]):
 		_update_floats(world, dt)
 		world["shake"] = maxf(0.0, float(world["shake"]) - dt * 28.0)
@@ -856,48 +859,50 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 		# Fists-only — keep chamber empty so no accidental gun branch can fire.
 		player["mag"] = 0
 		player["mag_size"] = 0
-	if shoot and float(player["fire_cooldown"]) <= 0.0 and (player["aim"] as Vector2).length_squared() > 1e-6:
+	if float(player["fire_cooldown"]) <= 0.0 and (player["aim"] as Vector2).length_squared() > 1e-6:
 		if not armed:
-			# Unarmed: punch only — no dry-fire, no muzzle, no projectile.
-			if not _try_melee(world, true):
-				_swing_punch_miss(world)
+			# Unarmed: click-only punch — holding LMB must not auto-swing.
+			if shoot_click:
+				if not _try_melee(world, true):
+					_swing_punch_miss(world)
 		elif int(player.get("mag", 0)) <= 0:
-			# Armed but dry — shove or click.
-			if _try_melee(world, false):
-				pass
-			else:
-				if int(player.get("reserve", 0)) <= 0:
-					_set_message(world, "Out of ammo — ransack Ammo Boxes.", 1.2)
+			# Armed but dry — click-only buttstock / dry-fire (no hold spam).
+			if shoot_click:
+				if _try_melee(world, false):
+					pass
 				else:
-					_set_message(world, "Empty mag — press R to reload.", 1.0)
-				player["fire_cooldown"] = 0.2
-				# Click still travels — dry-fire isn't free intel; crouch/brace cup it.
-				var dry_r := HEAR_DRYFIRE_RANGE
-				var dry_ttl := NOISE_TTL_DRYFIRE
-				if not bool(player.get("sprinting", false)):
-					var braced := bool(player.get("bracing", false))
-					var crouched := bool(player.get("crouching", false))
-					if braced and crouched:
-						dry_r *= BRACE_CROUCH_DRYFIRE_HEAR_MULT
-						dry_ttl *= 0.75
-					elif braced:
-						dry_r *= BRACE_DRYFIRE_HEAR_MULT
-						dry_ttl *= 0.85
-					elif crouched:
-						dry_r *= CROUCH_DRYFIRE_HEAR_MULT
-						dry_ttl *= 0.85
+					if int(player.get("reserve", 0)) <= 0:
+						_set_message(world, "Out of ammo — ransack Ammo Boxes.", 1.2)
 					else:
-						# Upright limp slap — shaking hands telegraph the empty click.
-						var hp_ratio_d := float(player.get("hp", 1.0)) / maxf(1.0, float(player.get("max_hp", 1.0)))
-						if hp_ratio_d <= WOUNDED_HP_RATIO:
-							dry_r *= WOUNDED_DRYFIRE_HEAR_MULT
-							dry_ttl *= 1.1
-						# Greedy pack — stuffing the bag also rattles the empty slap.
-						if bool(player.get("heavy_bag", false)):
-							dry_r *= HEAVY_BAG_DRYFIRE_HEAR_MULT
-							dry_ttl *= 1.05
-				_emit_noise(world, player["pos"], dry_r, dry_ttl)
-		else:
+						_set_message(world, "Empty mag — press R to reload.", 1.0)
+					player["fire_cooldown"] = 0.2
+					# Click still travels — dry-fire isn't free intel; crouch/brace cup it.
+					var dry_r := HEAR_DRYFIRE_RANGE
+					var dry_ttl := NOISE_TTL_DRYFIRE
+					if not bool(player.get("sprinting", false)):
+						var braced := bool(player.get("bracing", false))
+						var crouched := bool(player.get("crouching", false))
+						if braced and crouched:
+							dry_r *= BRACE_CROUCH_DRYFIRE_HEAR_MULT
+							dry_ttl *= 0.75
+						elif braced:
+							dry_r *= BRACE_DRYFIRE_HEAR_MULT
+							dry_ttl *= 0.85
+						elif crouched:
+							dry_r *= CROUCH_DRYFIRE_HEAR_MULT
+							dry_ttl *= 0.85
+						else:
+							# Upright limp slap — shaking hands telegraph the empty click.
+							var hp_ratio_d := float(player.get("hp", 1.0)) / maxf(1.0, float(player.get("max_hp", 1.0)))
+							if hp_ratio_d <= WOUNDED_HP_RATIO:
+								dry_r *= WOUNDED_DRYFIRE_HEAR_MULT
+								dry_ttl *= 1.1
+							# Greedy pack — stuffing the bag also rattles the empty slap.
+							if bool(player.get("heavy_bag", false)):
+								dry_r *= HEAVY_BAG_DRYFIRE_HEAR_MULT
+								dry_ttl *= 1.05
+					_emit_noise(world, player["pos"], dry_r, dry_ttl)
+		elif shoot:
 			var shot_dir := _player_shot_dir(player, world["loadout"])
 			_spawn_bullet(world, player, shot_dir, true, 560.0)
 			player["mag"] = int(player["mag"]) - 1
@@ -1761,8 +1766,20 @@ static func _try_empty_mag_shove(world: Dictionary) -> bool:
 	return _try_melee(world, false)
 
 
+static func _spend_melee_stamina(player: Dictionary, cost: float) -> bool:
+	var stam := float(player.get("stamina", 0.0))
+	if stam < cost:
+		return false
+	player["stamina"] = stam - cost
+	return true
+
+
 static func _swing_punch_miss(world: Dictionary) -> void:
 	var player: Dictionary = world["player"]
+	if not _spend_melee_stamina(player, PUNCH_MISS_STAMINA_COST):
+		_set_message(world, "Too gassed to swing.", 0.9)
+		player["fire_cooldown"] = 0.25
+		return
 	player["fire_cooldown"] = PUNCH_COOLDOWN * 0.75
 	player["punch_swing"] = PUNCH_SWING_TTL
 	_emit_noise(world, player["pos"], HEAR_PUNCH_RANGE * 0.55, NOISE_TTL_PUNCH * 0.7)
@@ -1793,6 +1810,11 @@ static func _try_melee(world: Dictionary, unarmed: bool = false) -> bool:
 		best = roamer
 	if best == null:
 		return false
+	var stam_cost := PUNCH_STAMINA_COST if unarmed else MELEE_STAMINA_COST
+	if not _spend_melee_stamina(player, stam_cost):
+		_set_message(world, "Too gassed to swing.", 0.9)
+		player["fire_cooldown"] = 0.25
+		return true  # consumed the click; don't fall through to miss/dry-fire
 	var target: Dictionary = best
 	# Behind a sleeper while crouched — drop them soft instead of a stadium shove.
 	var was_dormant := bool(target.get("dormant", false))
@@ -1803,9 +1825,10 @@ static func _try_melee(world: Dictionary, unarmed: bool = false) -> bool:
 	var silent := was_dormant and behind \
 		and bool(player.get("crouching", false)) and not bool(player.get("sprinting", false)) \
 		and not bool(target.get("elite", false))
-	# Hobble once — never stack / refresh while already slowed.
+	# Hobble once — pin feet in place; never stack / refresh while already slowed.
 	if float(target.get("melee_slow_ttl", 0.0)) <= 0.0:
 		target["melee_slow_ttl"] = MELEE_SLOW_TTL
+		target["melee_root_pos"] = Vector2(target["pos"])
 	var base_dmg := PUNCH_SILENT_DAMAGE if (unarmed and silent) else (PUNCH_DAMAGE if unarmed else (MELEE_SILENT_DAMAGE if silent else MELEE_DAMAGE))
 	var dmg := base_dmg * (0.7 if bool(target.get("elite", false)) else 1.0)
 	target["hp"] = float(target["hp"]) - dmg
@@ -1829,8 +1852,7 @@ static func _try_melee(world: Dictionary, unarmed: bool = false) -> bool:
 			float(Items.loadout_recoil_stats(world["loadout"])["max_bloom"]),
 			float(player.get("recoil_bloom", 0.0)) + (0.012 if silent else 0.03)
 		)
-	# Light camera bump only — heavy shake made contact look like a warp.
-	world["shake"] = maxf(float(world["shake"]), 1.2 if silent else (1.6 if unarmed else 2.2))
+	# No camera shake on melee — shake made contact read as a warp.
 	if silent:
 		_emit_noise(world, player["pos"], HEAR_MELEE_SILENT_RANGE, NOISE_TTL_MELEE_SILENT)
 		_push_float(world, target["pos"] + Vector2(0, -14), "DROP", Color("9de8ff"), 0.65)
@@ -2129,6 +2151,7 @@ static func _make_actor(world: Dictionary, kind: String, pos: Vector2, extras: D
 		"pos": pos,
 		"vel": Vector2.ZERO,
 		"melee_slow_ttl": 0.0,
+		"melee_root_pos": pos,
 		"hp": float(extras.get("hp", 100.0)),
 		"max_hp": float(extras.get("max_hp", 100.0)),
 		"radius": float(extras.get("radius", 14.0)),
@@ -2477,6 +2500,8 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 				roamer["ai_state"] = "dormant"
 				_collide_actor_obstacles(roamer, world["obstacles"])
 				_clamp_to_map(roamer, float(world["width"]), float(world["height"]))
+				if _roamer_melee_rooted(roamer) and roamer.has("melee_root_pos"):
+					roamer["pos"] = roamer["melee_root_pos"]
 				_tick_roamer_melee_slow(roamer, dt)
 				continue
 
@@ -2526,7 +2551,10 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 
 		_collide_actor_obstacles(roamer, world["obstacles"])
 		_clamp_to_map(roamer, float(world["width"]), float(world["height"]))
-		# Expire slow after movement so the last rooted frame isn't a surprise backpedal.
+		# Hard pin while punch-rooted — AI/collision must not slide them away.
+		if _roamer_melee_rooted(roamer) and roamer.has("melee_root_pos"):
+			roamer["pos"] = roamer["melee_root_pos"]
+		# Expire slow after the pin so the last rooted frame isn't a surprise backpedal.
 		_tick_roamer_melee_slow(roamer, dt)
 	world["extract_contest_count"] = contest_count
 
