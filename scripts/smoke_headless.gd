@@ -165,13 +165,63 @@ func _initialize() -> void:
 		}]
 		_RaidSim.step_raid(world, 0.05, Vector2.ZERO, player["pos"] + Vector2(40, 0), true, false, 2.0)
 		var roamer: Dictionary = world["roamers"][0]
-		var frame_jump: float = (roamer["pos"] as Vector2).distance_to(start)
+		var after_hit: Vector2 = roamer["pos"]
 		var slow_ttl := float(roamer.get("melee_slow_ttl", 0.0))
-		# No knockback teleport; contact applies ~0.5s slow (minus the step dt).
+		# Stay planted for the slow window — combat backpedal used to look like a teleport.
+		for _i in 9:
+			world["bullets"] = []
+			_RaidSim.step_raid(world, 0.05, Vector2.ZERO, player["pos"] + Vector2(40, 0), false, false, 2.0)
+		var drift: float = (roamer["pos"] as Vector2).distance_to(after_hit)
+		var still_slow := float(roamer.get("melee_slow_ttl", 0.0)) > 0.0
 		return float(roamer["hp"]) < 80.0 \
-			and frame_jump < 8.0 \
-			and slow_ttl > 0.35 and slow_ttl <= _RaidSim.MELEE_SLOW_TTL \
-			and is_equal_approx(_RaidSim._roamer_speed(roamer), 100.0 * _RaidSim.MELEE_SLOW_MULT)
+			and after_hit.distance_to(start) < 1.0 \
+			and drift < 1.0 \
+			and still_slow \
+			and slow_ttl > 0.35 and slow_ttl <= _RaidSim.MELEE_SLOW_TTL
+	)
+	failed += _check("punch slow does not stack", func() -> bool:
+		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": "sling_bag"}
+		var world := _RaidSim.create_raid_world(loadout)
+		var player: Dictionary = world["player"]
+		var start: Vector2 = player["pos"] + Vector2(28, 0)
+		world["obstacles"] = []
+		world["roamers"] = [{
+			"id": 99,
+			"alive": true,
+			"pos": start,
+			"radius": 12.0,
+			"hp": 200.0,
+			"max_hp": 200.0,
+			"mitigation": 0.0,
+			"aim": Vector2.LEFT,
+			"speed": 100.0,
+			"damage": 8.0,
+			"fire_cooldown": 99.0,
+			"hit_flash": 0.0,
+			"alert_ttl": 0.0,
+			"search_ttl": 0.0,
+			"call_cooldown": 0.0,
+			"suppress_ttl": 0.0,
+			"telegraph_ttl": 0.0,
+			"aggro_range": 220.0,
+			"hear_mult": 1.0,
+			"dormant": false,
+			"ai_state": "patrol",
+			"elite": false,
+			"role": "roamer",
+			"home": start,
+			"patrol_phase": 0.0,
+			"melee_slow_ttl": 0.0,
+		}]
+		_RaidSim.step_raid(world, 0.05, Vector2.ZERO, player["pos"] + Vector2(40, 0), true, false, 2.0)
+		var ttl_after_first := float(world["roamers"][0].get("melee_slow_ttl", 0.0))
+		# Second punch while still slowed must not refresh / extend the timer.
+		world["player"]["fire_cooldown"] = 0.0
+		_RaidSim.step_raid(world, 0.05, Vector2.ZERO, player["pos"] + Vector2(40, 0), true, false, 2.0)
+		var ttl_after_second := float(world["roamers"][0].get("melee_slow_ttl", 0.0))
+		return ttl_after_first > 0.35 \
+			and ttl_after_second < ttl_after_first \
+			and ttl_after_second <= _RaidSim.MELEE_SLOW_TTL
 	)
 	failed += _check("unarmed LMB never spawns projectile", func() -> bool:
 		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": null}
