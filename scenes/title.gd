@@ -12,11 +12,24 @@ var _pulse := 0.0
 
 
 func _ready() -> void:
-	_has_save = SaveGame.has_save()
+	_has_save = false
 	_new_armed = false
+	var meta_preview := {}
+	if SaveGame.has_save():
+		meta_preview = SaveGame.load_meta()
+		if meta_preview.is_empty():
+			# Damaged file still on disk — don't offer Continue; New run can wipe.
+			save_hint.text = "Save damaged — choose New run to wipe, or fix the file."
+			continue_button.visible = false
+			new_button.text = "New run"
+			UiStyle.style_button(new_button, true)
+			continue_button.pressed.connect(_on_continue)
+			new_button.pressed.connect(_on_new_pressed)
+			return
+		_has_save = true
 	continue_button.visible = _has_save
 	if _has_save:
-		save_hint.text = SaveGame.summarize(SaveGame.load_meta())
+		save_hint.text = SaveGame.summarize(meta_preview)
 		continue_button.text = "Continue"
 		new_button.text = "New run"
 		UiStyle.style_button(continue_button, true)
@@ -36,7 +49,10 @@ func _process(dt: float) -> void:
 	var a := 0.55 + 0.45 * (0.5 + 0.5 * sin(_pulse * 1.6))
 	accent.modulate = Color(1, 1, 1, a)
 	if Input.is_action_just_pressed("start_raid") or Input.is_action_just_pressed("ui_accept"):
-		if _has_save:
+		# When wipe is armed, Enter confirms New run instead of Continue.
+		if _new_armed:
+			GameSession.start_new_run()
+		elif _has_save:
 			_on_continue()
 		else:
 			GameSession.start_new_run()

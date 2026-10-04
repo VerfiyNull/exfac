@@ -44,9 +44,24 @@ func _ready() -> void:
 	GameSession.meta["packed_scrap"] = 0
 	var skills: Dictionary = Skills.ensure(GameSession.meta)
 	world = RaidSim.create_raid_world(GameSession.meta["loadout"], packed, skills)
+	var need_persist := false
+	# Refund medkits that did not fit the bag (create_raid_world may truncate).
+	var med_refund := int(world.get("pack_refund_medkits", 0))
+	world["pack_refund_medkits"] = 0
+	if med_refund > 0:
+		Items.add_to_stash(GameSession.meta["stash"], Items.stack_of("medkit", med_refund))
+		need_persist = true
+	# Scrap pack — capacity-safe; leftovers return to locker.
 	if packed_scrap > 0:
-		Items.add_to_stash(world["inventory"], Items.stack_of("scrap", packed_scrap))
+		var scrap_left := Items.try_add_inventory_partial(
+			world["inventory"], int(world["inventory_cap"]), Items.stack_of("scrap", packed_scrap)
+		)
 		RaidSim.refresh_inventory_cap(world)
+		if scrap_left > 0:
+			Items.add_to_stash(GameSession.meta["stash"], Items.stack_of("scrap", scrap_left))
+			need_persist = true
+	if need_persist:
+		GameSession.persist()
 	fire_rate = Items.loadout_fire_rate(GameSession.meta["loadout"])
 	result_panel.visible = false
 	cam.make_current()
@@ -346,9 +361,10 @@ func _draw() -> void:
 	var player: Dictionary = world["player"]
 	var obstacles: Array = world["obstacles"]
 
-	# Vision ring (player awareness).
+	# Vision ring — match fog (dusk/wound shrink vision_range).
 	if bool(player["alive"]):
-		draw_arc(player["pos"], RaidSim.VISION_RANGE, 0.0, TAU, 64, Color(0.4, 0.7, 1.0, 0.12), 1.5)
+		var vision_r := float(player.get("vision_range", RaidSim.VISION_RANGE))
+		draw_arc(player["pos"], vision_r, 0.0, TAU, 64, Color(0.4, 0.7, 1.0, 0.12), 1.5)
 
 	for z in world["extracts"]:
 		var zp: Vector2 = z["pos"]
@@ -539,7 +555,8 @@ func _draw() -> void:
 	for f in world["floats"]:
 		if not RaidSim.can_see_actor(player, f["pos"], obstacles) and bool(player["alive"]):
 			# Still show floats on self / nearby; skip far fogged ones.
-			if player["pos"].distance_to(f["pos"]) > RaidSim.VISION_RANGE:
+			var vision_cut := float(player.get("vision_range", RaidSim.VISION_RANGE))
+			if player["pos"].distance_to(f["pos"]) > vision_cut:
 				continue
 		var alpha := clampf(float(f["life"]) / float(f["max_life"]), 0.0, 1.0)
 		var col: Color = f["color"]

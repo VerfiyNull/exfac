@@ -34,6 +34,8 @@ static func create_meta_state() -> Dictionary:
 		"raids_completed": 0,
 		"raids_survived": 0,
 		"pack_scrap_qty": 0,
+		"packed_medkits": 0,
+		"packed_scrap": 0,
 	}
 
 
@@ -50,6 +52,12 @@ static func equip_from_stash(meta: Dictionary, slot: String, def_id: String) -> 
 	var loadout: Dictionary = meta["loadout"]
 	var current: Variant = loadout.get(slot)
 	var name := Items.item_name(def_id)
+	var expected := _loadout_slot_kind(slot)
+	if expected.is_empty():
+		return "Unknown kit slot."
+	var def := Items.get_item(def_id)
+	if String(def.get("slot", "")) != expected:
+		return "%s can't go in that slot." % name
 	if current != null and String(current) == def_id:
 		return "Already equipped %s." % name
 	if not Items.remove_from_stash(meta["stash"], def_id, 1):
@@ -58,6 +66,18 @@ static func equip_from_stash(meta: Dictionary, slot: String, def_id: String) -> 
 		Items.add_to_stash(meta["stash"], Items.stack_of(String(current), 1))
 	loadout[slot] = def_id
 	return "Equipped %s." % name
+
+
+static func _loadout_slot_kind(slot: String) -> String:
+	match slot:
+		"weapon_id":
+			return "weapon"
+		"armor_id":
+			return "armor"
+		"bag_id":
+			return "bag"
+		_:
+			return ""
 
 
 static func unequip_to_stash(meta: Dictionary, slot: String) -> String:

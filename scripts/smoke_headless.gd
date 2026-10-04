@@ -916,6 +916,168 @@ func _initialize() -> void:
 		return _MetaSim.gear_score("mesh_carrier") > _MetaSim.gear_score("cloth_armor") \
 			and _MetaSim.gear_score("coil_carbine") > _MetaSim.gear_score("field_pistol")
 	)
+	failed += _check("bag-full loot stays in container", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var world := _RaidSim.create_raid_world(meta["loadout"], 0)
+		world["roamers"] = []
+		world["inventory"] = [_Items.stack_of("scrap", int(world["inventory_cap"]))]
+		_RaidSim.refresh_inventory_cap(world)
+		var crate: Dictionary = world["crates"][0]
+		crate["opened"] = false
+		crate["kind"] = "crate"
+		crate["contents"] = [_Items.stack_of("gold_watch", 1), _Items.stack_of("intel", 1)]
+		crate["pos"] = world["player"]["pos"] + Vector2(12, 0)
+		_RaidSim.step_raid(world, 0.0, Vector2.ZERO, world["player"]["pos"], false, true, 4.0)
+		for _i in 40:
+			world["roamers"] = []
+			world["bullets"] = []
+			_RaidSim.step_raid(world, 0.1, Vector2.ZERO, world["player"]["pos"], false, false, 4.0)
+		return not bool(crate["opened"]) \
+			and (crate["contents"] as Array).size() >= 2 \
+			and _Items.count_in_stacks(world["inventory"], "gold_watch") == 0
+	)
+	failed += _check("partial loot keeps remainder", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var world := _RaidSim.create_raid_world(meta["loadout"], 0)
+		world["roamers"] = []
+		# One free slot — 3-scrap stack should take 1 and leave 2.
+		world["inventory"] = [_Items.stack_of("medkit", int(world["inventory_cap"]) - 1)]
+		_RaidSim.refresh_inventory_cap(world)
+		var crate: Dictionary = world["crates"][0]
+		crate["opened"] = false
+		crate["contents"] = [_Items.stack_of("scrap", 3)]
+		crate["pos"] = world["player"]["pos"] + Vector2(12, 0)
+		_RaidSim.step_raid(world, 0.0, Vector2.ZERO, world["player"]["pos"], false, true, 4.0)
+		for _i in 40:
+			world["roamers"] = []
+			world["bullets"] = []
+			_RaidSim.step_raid(world, 0.1, Vector2.ZERO, world["player"]["pos"], false, false, 4.0)
+		return _Items.count_in_stacks(world["inventory"], "scrap") == 1 \
+			and not bool(crate["opened"]) \
+			and _Items.count_in_stacks(crate["contents"], "scrap") == 2
+	)
+	failed += _check("packed medkits survive save round-trip", func() -> bool:
+		_SaveGame.delete_save()
+		var meta := _MetaSim.create_meta_state()
+		meta["packed_medkits"] = 2
+		meta["packed_scrap"] = 1
+		if not _SaveGame.save_meta(meta):
+			return false
+		var bundle := _SaveGame.load_bundle()
+		_SaveGame.delete_save()
+		var loaded: Dictionary = bundle.get("meta", {})
+		return int(loaded.get("packed_medkits", 0)) == 2 \
+			and int(loaded.get("packed_scrap", 0)) == 1
+	)
+	failed += _check("count_in_stacks sums duplicate rows", func() -> bool:
+		var stacks: Array = [
+			_Items.stack_of("scrap", 2),
+			_Items.stack_of("medkit", 1),
+			{"def_id": "scrap", "qty": 3},
+		]
+		return _Items.count_in_stacks(stacks, "scrap") == 5
+	)
+	failed += _check("hydrate merges duplicate stash rows", func() -> bool:
+		_SaveGame.delete_save()
+		var meta := _MetaSim.create_meta_state()
+		meta["stash"] = [
+			_Items.stack_of("scrap", 2),
+			{"def_id": "scrap", "qty": 4},
+		]
+		if not _SaveGame.save_meta(meta):
+			return false
+		var loaded := _SaveGame.load_meta()
+		_SaveGame.delete_save()
+		var scrap_rows := 0
+		for s in loaded.get("stash", []):
+			if String(s["def_id"]) == "scrap":
+				scrap_rows += 1
+		return scrap_rows == 1 and _Items.count_in_stacks(loaded["stash"], "scrap") == 6
+	)
+	failed += _check("equip rejects wrong slot", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		meta["stash"] = [_Items.stack_of("medkit", 1)]
+		var note := _MetaSim.equip_from_stash(meta, "weapon_id", "medkit")
+		return note.find("can't go") >= 0 \
+			and String(meta["loadout"].get("weapon_id", "")) != "medkit" \
+			and _Items.count_in_stacks(meta["stash"], "medkit") == 1
+	)
+	failed += _check("selection remaps after sort by def_id", func() -> bool:
+		var stash: Array = [
+			_Items.stack_of("scrap", 1),
+			_Items.stack_of("patrol_rifle", 1),
+			_Items.stack_of("cloth_armor", 1),
+		]
+		var selected_def := "scrap"
+		_Items.sort_stash(stash)
+		var idx := _Items.index_of_def(stash, selected_def)
+		return idx >= 0 and String(stash[idx]["def_id"]) == "scrap"
+	)
+	failed += _check("medkit pack excess sets refund", func() -> bool:
+		# Pockets-only cap is 2; asking for 5 must pack 2 and refund 3.
+		var world := _RaidSim.create_raid_world(
+			{"weapon_id": null, "armor_id": null, "bag_id": null}, 5
+		)
+		return int(world.get("pack_refund_medkits", -1)) == 3 \
+			and _Items.count_in_stacks(world["inventory"], "medkit") == 2 \
+			and int(world["inventory_cap"]) == 2
+	)
+	failed += _check("item migrate raid_rifle on load", func() -> bool:
+		_SaveGame.delete_save()
+		var payload := {
+			"version": 2,
+			"saved_at": 1,
+			"meta": {
+				"stash": [{"def_id": "raid_rifle", "qty": 1}, {"def_id": "raid_pack", "qty": 1}],
+				"loadout": {"weapon_id": "raid_rifle", "armor_id": null, "bag_id": "raid_pack"},
+				"skills": {"points": 0, "ranks": {}},
+				"influence": 0,
+				"credits": 0,
+				"hub_visit_id": 0,
+				"raids_completed": 0,
+				"raids_survived": 0,
+				"pack_scrap_qty": 0,
+			},
+			"last_raid": {},
+			"raid_history": [],
+		}
+		var f := FileAccess.open(_SaveGame.SAVE_PATH, FileAccess.WRITE)
+		if f == null:
+			return false
+		f.store_string(JSON.stringify(payload))
+		f.close()
+		var loaded := _SaveGame.load_meta()
+		_SaveGame.delete_save()
+		return String(loaded["loadout"].get("weapon_id", "")) == "patrol_rifle" \
+			and String(loaded["loadout"].get("bag_id", "")) == "field_pack" \
+			and _Items.count_in_stacks(loaded["stash"], "patrol_rifle") == 1 \
+			and _Items.count_in_stacks(loaded["stash"], "field_pack") == 1
+	)
+	failed += _check("corrupt save reports empty bundle", func() -> bool:
+		_SaveGame.delete_save()
+		var f := FileAccess.open(_SaveGame.SAVE_PATH, FileAccess.WRITE)
+		f.store_string("not-json{{{")
+		f.close()
+		var bundle := _SaveGame.load_bundle()
+		var err := _SaveGame.last_load_error
+		_SaveGame.delete_save()
+		return bundle.is_empty() and not err.is_empty()
+	)
+	failed += _check("try_add_inventory_partial respects cap", func() -> bool:
+		var inv: Array = [_Items.stack_of("scrap", 1)]
+		var left := _Items.try_add_inventory_partial(inv, 3, _Items.stack_of("medkit", 5))
+		return left == 3 and _Items.count_in_stacks(inv, "medkit") == 2 \
+			and _Items.inventory_used(inv) == 3
+	)
+	failed += _check("aborted result has full schema", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var world := _RaidSim.create_raid_world(meta["loadout"], 0)
+		world["over"] = true
+		world["outcome"] = "aborted"
+		var result := _RaidSim.finalize_raid_result(world)
+		return String(result.get("outcome", "")) == "aborted" \
+			and result.has("dropped") and result.has("skill_bonus") and result.has("loot")
+	)
 
 	if failed == 0:
 		print("SMOKE_OK exfac")

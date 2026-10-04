@@ -513,7 +513,17 @@ func _refresh() -> void:
 
 	_refresh_filter_buttons()
 	_refresh_skills()
+	# Keep selection by item identity — sort reorder must not retarget Sell/Equip.
+	var selected_def := ""
+	var stash_pre: Array = meta["stash"]
+	if not stash_pre.is_empty():
+		var si := clampi(GameSession.selected_stash_index, 0, stash_pre.size() - 1)
+		selected_def = String(stash_pre[si].get("def_id", ""))
 	Items.sort_stash(meta["stash"])
+	if not selected_def.is_empty():
+		var remapped := Items.index_of_def(meta["stash"], selected_def)
+		if remapped >= 0:
+			GameSession.selected_stash_index = remapped
 	stash_list.clear()
 	_visible_stash_indices.clear()
 	var stash: Array = meta["stash"]

@@ -30,6 +30,7 @@ func _boot_meta(force_new: bool) -> void:
 	loaded_from_save = false
 	last_raid_result = {}
 	raid_history = []
+	var save_was_bad := false
 	if not force_new and SaveGame.has_save():
 		var bundle := SaveGame.load_bundle()
 		if not bundle.is_empty():
@@ -42,6 +43,9 @@ func _boot_meta(force_new: bool) -> void:
 			stipend_note = ""
 			selected_stash_index = 0
 			return
+		# Corrupt / unsupported file — quarantine so Continue doesn't keep lying.
+		SaveGame.quarantine_save()
+		save_was_bad = true
 	meta = MetaSim.create_meta_state()
 	Skills.ensure(meta)
 	var stipend := MetaSim.begin_hub_visit(meta)
@@ -49,7 +53,7 @@ func _boot_meta(force_new: bool) -> void:
 		stipend_note = "+%d credits" % stipend
 	else:
 		stipend_note = ""
-	status = "Kit up from the locker, then deploy."
+	status = "Save unreadable — started a fresh run." if save_was_bad else "Kit up from the locker, then deploy."
 	selected_stash_index = 0
 
 

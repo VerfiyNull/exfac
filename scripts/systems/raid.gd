@@ -128,6 +128,7 @@ const HEAVY_BAG_RELOAD_MULT := 0.82
 const HEAVY_BAG_HEAL_MULT := 0.85
 ## Shaking hands — limp HP also slows the medkit channel.
 const WOUNDED_HEAL_MULT := 0.78
+const WOUNDED_RELOAD_MULT := 0.78
 ## Roamers hear shots / sprint even without line of sight.
 const HEAR_SHOT_RANGE := 560.0
 const HEAR_SPRINT_RANGE := 240.0
@@ -411,7 +412,10 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 	_refresh_armor_mitigation(world["player"])
 
 	_refresh_bag_cap(world)
-	var pack := mini(packed_medkits, int(world["inventory_cap"]))
+	# Pack only what fits; excess is refunded to the locker by the raid scene.
+	var want_pack := maxi(0, packed_medkits)
+	var pack := mini(want_pack, int(world["inventory_cap"]))
+	world["pack_refund_medkits"] = want_pack - pack
 	if pack > 0:
 		Items.add_to_stash(world["inventory"], Items.stack_of("medkit", pack))
 		_refresh_bag_cap(world)
@@ -707,7 +711,7 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 			# Shaking hands — critical wounds make mags stick.
 			var hp_ratio_r := float(player["hp"]) / maxf(1.0, float(player["max_hp"]))
 			if hp_ratio_r <= WOUNDED_HP_RATIO:
-				reload_rate *= 0.78
+				reload_rate *= WOUNDED_RELOAD_MULT
 			# Greedy packs — fumbling around a stuffed bag slows the mag change.
 			var used_r := float(Items.inventory_used(world["inventory"]))
 			var cap_r := maxf(1.0, float(world["inventory_cap"]))
@@ -1131,8 +1135,11 @@ static func _stance_spread_mult(player: Dictionary) -> float:
 	return mult
 
 
-static func _apply_suppression(player: Dictionary, amount: float, ttl: float = 0.55) -> void:
-	var stats_cap := 0.35
+static func _apply_suppression(world: Dictionary, player: Dictionary, amount: float, ttl: float = 0.55) -> void:
+	# Cap with the equipped weapon's bloom ceiling (not a global magic 0.35).
+	var stats_cap := float(Items.loadout_recoil_stats(world.get("loadout", {})).get("max_bloom", 0.35))
+	if stats_cap <= 0.0:
+		stats_cap = 0.35
 	player["recoil_bloom"] = minf(stats_cap, float(player.get("recoil_bloom", 0.0)) + amount)
 	player["suppress_ttl"] = maxf(float(player.get("suppress_ttl", 0.0)), ttl)
 
@@ -1599,6 +1606,7 @@ static func _finish_loot(world: Dictionary, nearest: Dictionary) -> void:
 	var blocked := 0
 	var ammo_gained := 0
 	var kind := String(nearest.get("kind", "crate"))
+	var remaining: Array = []
 	for stack in nearest["contents"]:
 		_refresh_bag_cap(world)
 		if String(stack["def_id"]) == "ammo_box":
@@ -1608,13 +1616,20 @@ static func _finish_loot(world: Dictionary, nearest: Dictionary) -> void:
 			taken += int(stack["qty"])
 			taken_names.append("Ammo +%d" % rounds)
 			continue
-		if Items.try_add_inventory(world["inventory"], int(world["inventory_cap"]), {"def_id": stack["def_id"], "qty": stack["qty"]}):
-			taken += int(stack["qty"])
+		var qty := int(stack["qty"])
+		var left := Items.try_add_inventory_partial(
+			world["inventory"], int(world["inventory_cap"]), {"def_id": stack["def_id"], "qty": qty}
+		)
+		var got := qty - left
+		if got > 0:
+			taken += got
 			taken_names.append(Items.item_name(stack["def_id"]))
-		else:
-			blocked += int(stack["qty"])
-	nearest["opened"] = true
-	nearest["contents"] = []
+		if left > 0:
+			blocked += left
+			remaining.append({"def_id": String(stack["def_id"]), "qty": left})
+	# Keep unclaimed stacks in the container — bag-full must not delete loot.
+	nearest["contents"] = remaining
+	nearest["opened"] = remaining.is_empty()
 	_refresh_bag_cap(world)
 	var verb := Items.container_display_name(kind)
 	if kind == "corpse":
@@ -1950,12 +1965,15 @@ static func finalize_raid_result(world: Dictionary) -> Dictionary:
 			"loot": [],
 			"dropped": dropped,
 			"influence_gained": 0,
+			"skill_bonus": 0,
 			"message": "KIA — drop bag lost (%d items). Locker untouched." % lost_n,
 		}
 	return {
 		"outcome": "aborted",
 		"loot": [],
+		"dropped": [],
 		"influence_gained": 0,
+		"skill_bonus": 0,
 		"message": "Field aborted.",
 	}
 
@@ -2419,10 +2437,12 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 				roamer["last_heard"] = noise_pos
 
 		# Blood scent — wounded trails pull patrols even when you're quiet.
+		# Sets last_heard only (not acoustic hears) so investigate never chases stale noise_pos.
+		var scent_pull := false
 		if not hears and not sees_player and bool(player["alive"]):
 			var scent: Variant = _nearest_blood(world, roamer["pos"], BLOOD_SCENT_RANGE)
 			if scent != null:
-				hears = true
+				scent_pull = true
 				roamer["alert_ttl"] = maxf(float(roamer.get("alert_ttl", 0.0)), 1.8)
 				roamer["last_heard"] = scent
 
@@ -2467,13 +2487,14 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 				roamer["pos"] = roamer["pos"] + (roamer["aim"] as Vector2) * float(roamer["speed"]) * 1.35 * dt
 			elif d < 55.0:
 				roamer["pos"] = roamer["pos"] - (roamer["aim"] as Vector2) * float(roamer["speed"]) * 0.35 * dt
-			if float(roamer["fire_cooldown"]) <= 0.0 and (sees_player or d < 160.0):
+			# Rush fire needs LOS — close range alone must not shoot through walls.
+			if float(roamer["fire_cooldown"]) <= 0.0 and sees_player:
 				var rdir := (roamer["aim"] as Vector2).rotated(randf_range(-_roamer_shot_spread(roamer), _roamer_shot_spread(roamer)))
 				_spawn_bullet(world, roamer, rdir, false, 460.0)
 				roamer["fire_cooldown"] = randf_range(0.28, 0.55)
 
 		if not rushing:
-			_roamer_pick_state(world, roamer, sees_player, hears, bool(player["alive"]))
+			_roamer_pick_state(world, roamer, sees_player, hears or scent_pull, bool(player["alive"]))
 			# Idle contacts strip unlooted bodies — don't leave free kits on the ground.
 			if String(roamer.get("ai_state", "")) in ["patrol", "search", "forage"]:
 				_roamer_try_start_forage(world, roamer)
@@ -2487,7 +2508,8 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 				"forage":
 					_roamer_do_forage(world, roamer, dt)
 				"investigate":
-					_roamer_do_investigate(world, roamer, noise_pos if hears else roamer.get("last_heard", player["pos"]), dt)
+					# Always chase last_heard (noise + scent write it); never fall back to stale noise_pos.
+					_roamer_do_investigate(world, roamer, roamer.get("last_heard", player["pos"]), dt)
 				"search":
 					_roamer_do_search(world, roamer, dt)
 				"dormant":
@@ -2742,119 +2764,142 @@ static func _roamer_do_patrol(_world: Dictionary, roamer: Dictionary, dt: float)
 		roamer["pos"] = roamer["pos"] + roamer["aim"] * float(roamer["speed"]) * (0.55 if bool(roamer.get("elite", false)) else 0.45) * dt
 
 
+static func _bullet_hits_obstacle(p: Vector2, obstacles: Array) -> bool:
+	for o in obstacles:
+		if not _obstacle_blocks(o):
+			continue
+		if p.x >= float(o["x"]) and p.x <= float(o["x"]) + float(o["w"]) \
+				and p.y >= float(o["y"]) and p.y <= float(o["y"]) + float(o["h"]):
+			return true
+	return false
+
+
+static func _kill_roamer_from_bullet(world: Dictionary, roamer: Dictionary) -> void:
+	roamer["alive"] = false
+	var elite := bool(roamer.get("elite", false))
+	world["crates"].append({
+		"id": _alloc_id(world),
+		"pos": roamer["pos"],
+		"radius": 15.0 if elite else 14.0,
+		"opened": false,
+		"kind": "corpse",
+		"elite": elite,
+		"contents": Items.roll_enforcer_loot() if elite else Items.roll_roamer_loot(),
+	})
+	if elite:
+		_set_message(world, "Enforcer down — rich body (E).")
+		_push_float(world, roamer["pos"], "ENFORCER DOWN", Color("c9a0ff"), 1.4)
+		world["skill_deeds"] = int(world.get("skill_deeds", 0)) + 4
+	else:
+		_set_message(world, "Roamer down — loot the body (E).")
+		_push_float(world, roamer["pos"], "ROAMER DOWN", Color("e6b35a"), 1.2)
+		world["skill_deeds"] = int(world.get("skill_deeds", 0)) + 2
+
+
 static func _update_bullets(world: Dictionary, dt: float) -> void:
 	var next: Array = []
+	var map_w := float(world["width"])
+	var map_h := float(world["height"])
+	# Substep like LOS (12px) so fast rounds don't tunnel walls at low FPS.
+	const BULLET_STEP_PX := 12.0
 	for b in world["bullets"]:
 		b["life"] = float(b["life"]) - dt
 		if float(b["life"]) <= 0.0:
 			continue
-		b["pos"] = b["pos"] + b["vel"] * dt
-		var p: Vector2 = b["pos"]
-		if p.x < 0.0 or p.y < 0.0 or p.x > float(world["width"]) or p.y > float(world["height"]):
-			continue
-		var hit_obstacle := false
-		for o in world["obstacles"]:
-			if not _obstacle_blocks(o):
-				continue
-			if p.x >= float(o["x"]) and p.x <= float(o["x"]) + float(o["w"]) \
-					and p.y >= float(o["y"]) and p.y <= float(o["y"]) + float(o["h"]):
-				hit_obstacle = true
+		var travel: Vector2 = b["vel"] * dt
+		var travel_len := travel.length()
+		var steps := 1
+		if travel_len > BULLET_STEP_PX:
+			steps = int(ceil(travel_len / BULLET_STEP_PX))
+		var step_delta := travel / float(steps)
+		var consumed := false
+		for _s in steps:
+			b["pos"] = b["pos"] + step_delta
+			var p: Vector2 = b["pos"]
+			if p.x < 0.0 or p.y < 0.0 or p.x > map_w or p.y > map_h:
+				consumed = true
 				break
-		if hit_obstacle:
-			continue
+			if _bullet_hits_obstacle(p, world["obstacles"]):
+				consumed = true
+				break
 
-		if bool(b["from_player"]):
-			var hit := false
-			var suppressed: Dictionary = b.get("roamer_suppress_ids", {})
-			for roamer in world["roamers"]:
-				if not bool(roamer["alive"]):
-					continue
-				var dist_r: float = p.distance_to(roamer["pos"])
-				var rid := int(roamer["id"])
-				# Near-miss whip — pin their trigger even if the round doesn't connect.
-				if not bool(suppressed.get(rid, false)) and dist_r <= ROAMER_SUPPRESS_NEAR:
-					_apply_roamer_suppression(roamer, ROAMER_SUPPRESS_GAP)
-					suppressed[rid] = true
-					b["roamer_suppress_ids"] = suppressed
-				if dist_r <= float(roamer["radius"]) + float(b["radius"]):
-					var dmg := float(b["damage"]) * (1.0 - float(roamer["mitigation"]))
-					roamer["hp"] = float(roamer["hp"]) - dmg
-					roamer["hit_flash"] = 0.12
-					_apply_roamer_suppression(roamer, ROAMER_SUPPRESS_HIT_GAP, ROAMER_SUPPRESS_TTL * 1.15)
-					_push_float(world, roamer["pos"], "-%d" % int(ceil(dmg)), Color("ffd0d0"), 0.55)
-					if float(roamer["hp"]) <= 0.0:
-						roamer["alive"] = false
-						var elite := bool(roamer.get("elite", false))
-						world["crates"].append({
-							"id": _alloc_id(world),
-							"pos": roamer["pos"],
-							"radius": 15.0 if elite else 14.0,
-							"opened": false,
-							"kind": "corpse",
-							"elite": elite,
-							"contents": Items.roll_enforcer_loot() if elite else Items.roll_roamer_loot(),
-						})
-						if elite:
-							_set_message(world, "Enforcer down — rich body (E).")
-							_push_float(world, roamer["pos"], "ENFORCER DOWN", Color("c9a0ff"), 1.4)
-							world["skill_deeds"] = int(world.get("skill_deeds", 0)) + 4
-						else:
-							_set_message(world, "Roamer down — loot the body (E).")
-							_push_float(world, roamer["pos"], "ROAMER DOWN", Color("e6b35a"), 1.2)
-							world["skill_deeds"] = int(world.get("skill_deeds", 0)) + 2
-					hit = true
+			if bool(b["from_player"]):
+				var hit := false
+				var suppressed: Dictionary = b.get("roamer_suppress_ids", {})
+				for roamer in world["roamers"]:
+					if not bool(roamer["alive"]):
+						continue
+					var dist_r: float = p.distance_to(roamer["pos"])
+					var rid := int(roamer["id"])
+					# Near-miss whip — pin their trigger even if the round doesn't connect.
+					if not bool(suppressed.get(rid, false)) and dist_r <= ROAMER_SUPPRESS_NEAR:
+						_apply_roamer_suppression(roamer, ROAMER_SUPPRESS_GAP)
+						suppressed[rid] = true
+						b["roamer_suppress_ids"] = suppressed
+					if dist_r <= float(roamer["radius"]) + float(b["radius"]):
+						var dmg := float(b["damage"]) * (1.0 - float(roamer["mitigation"]))
+						roamer["hp"] = float(roamer["hp"]) - dmg
+						roamer["hit_flash"] = 0.12
+						_apply_roamer_suppression(roamer, ROAMER_SUPPRESS_HIT_GAP, ROAMER_SUPPRESS_TTL * 1.15)
+						_push_float(world, roamer["pos"], "-%d" % int(ceil(dmg)), Color("ffd0d0"), 0.55)
+						if float(roamer["hp"]) <= 0.0:
+							_kill_roamer_from_bullet(world, roamer)
+						hit = true
+						break
+				if hit:
+					consumed = true
 					break
-			if hit:
-				continue
-		elif bool(world["player"]["alive"]):
-			var pl: Dictionary = world["player"]
-			var dist_pl: float = p.distance_to(pl["pos"])
-			# Near-miss whip — open the cone even if the round doesn't connect.
-			if not bool(b.get("suppress_applied", false)) and dist_pl <= SUPPRESS_NEAR:
-				_apply_suppression(pl, SUPPRESS_BLOOM)
-				_mark_threat_bearing(world, b.get("origin", p))
-				# Near-miss whip also knocks the plant — settle isn't free under fire.
-				pl["brace_hold"] = 0.0
-				b["suppress_applied"] = true
-			if dist_pl <= float(pl["radius"]) + float(b["radius"]):
-				var base_mit := float(pl.get("base_mitigation", pl.get("mitigation", 0.0)))
-				var mit := float(pl.get("mitigation", 0.0))
-				var incoming := float(b["damage"])
-				var absorbed := incoming * mit
-				var pdmg := incoming - absorbed
-				pl["hp"] = float(pl["hp"]) - pdmg
-				pl["hit_flash"] = 0.15
-				world["shake"] = maxf(float(world["shake"]), 6.0)
-				_apply_suppression(pl, SUPPRESS_HIT_BLOOM, 0.75)
-				_mark_threat_bearing(world, b.get("origin", p))
-				# Hits break a settled plant — reacquire before the cone tightens again.
-				pl["brace_hold"] = 0.0
-				_push_float(world, pl["pos"], "-%d" % int(ceil(pdmg)), Color("e85454"), 0.7)
-				_wear_armor(world, absorbed, base_mit)
-				_interrupt_medkit(world, "Medkit interrupted — took fire.")
-				_interrupt_reload(world)
-				_interrupt_loot(world, "Ransack interrupted — took fire.")
-				# Holding extract under fire bleeds the timer — leave or finish under pressure.
-				if bool(world.get("extract_alarm", false)):
-					var bleed_mult := 1.0
-					for z in world["extracts"]:
-						if int(z["id"]) == int(world.get("active_extract_id", -1)):
-							bleed_mult = float(z.get("bleed_mult", 1.0))
-							break
-					world["extract_damage_bleed"] = float(world.get("extract_damage_bleed", 0.0)) + pdmg * EXTRACT_DAMAGE_PROGRESS_BLEED * bleed_mult
-				if float(pl["hp"]) <= 0.0:
-					pl["alive"] = false
-					pl["hp"] = 0.0
-					world["over"] = true
-					world["outcome"] = "died"
-					world["shake"] = 14.0
-					_spawn_player_drop_bag(world)
-					var lost := Items.inventory_used(world.get("dropped_loot", []))
-					_set_message(world, "KIA — drop bag left behind (%d items). Stash is safe." % lost, 6.0)
-					_push_float(world, pl["pos"], "DROP BAG", Color("e6b35a"), 2.0)
-					_push_float(world, pl["pos"] + Vector2(0, -14), "YOU DIED", Color("e85454"), 2.2)
-				continue
-		next.append(b)
+			elif bool(world["player"]["alive"]):
+				var pl: Dictionary = world["player"]
+				var dist_pl: float = p.distance_to(pl["pos"])
+				# Near-miss whip — open the cone even if the round doesn't connect.
+				if not bool(b.get("suppress_applied", false)) and dist_pl <= SUPPRESS_NEAR:
+					_apply_suppression(world, pl, SUPPRESS_BLOOM)
+					_mark_threat_bearing(world, b.get("origin", p))
+					# Near-miss whip also knocks the plant — settle isn't free under fire.
+					pl["brace_hold"] = 0.0
+					b["suppress_applied"] = true
+				if dist_pl <= float(pl["radius"]) + float(b["radius"]):
+					var base_mit := float(pl.get("base_mitigation", pl.get("mitigation", 0.0)))
+					var mit := float(pl.get("mitigation", 0.0))
+					var incoming := float(b["damage"])
+					var absorbed := incoming * mit
+					var pdmg := incoming - absorbed
+					pl["hp"] = float(pl["hp"]) - pdmg
+					pl["hit_flash"] = 0.15
+					world["shake"] = maxf(float(world["shake"]), 6.0)
+					_apply_suppression(world, pl, SUPPRESS_HIT_BLOOM, 0.75)
+					_mark_threat_bearing(world, b.get("origin", p))
+					# Hits break a settled plant — reacquire before the cone tightens again.
+					pl["brace_hold"] = 0.0
+					_push_float(world, pl["pos"], "-%d" % int(ceil(pdmg)), Color("e85454"), 0.7)
+					_wear_armor(world, absorbed, base_mit)
+					_interrupt_medkit(world, "Medkit interrupted — took fire.")
+					_interrupt_reload(world)
+					_interrupt_loot(world, "Ransack interrupted — took fire.")
+					# Holding extract under fire bleeds the timer — leave or finish under pressure.
+					if bool(world.get("extract_alarm", false)):
+						var bleed_mult := 1.0
+						for z in world["extracts"]:
+							if int(z["id"]) == int(world.get("active_extract_id", -1)):
+								bleed_mult = float(z.get("bleed_mult", 1.0))
+								break
+						world["extract_damage_bleed"] = float(world.get("extract_damage_bleed", 0.0)) + pdmg * EXTRACT_DAMAGE_PROGRESS_BLEED * bleed_mult
+					if float(pl["hp"]) <= 0.0:
+						pl["alive"] = false
+						pl["hp"] = 0.0
+						world["over"] = true
+						world["outcome"] = "died"
+						world["shake"] = 14.0
+						_spawn_player_drop_bag(world)
+						var lost := Items.inventory_used(world.get("dropped_loot", []))
+						_set_message(world, "KIA — drop bag left behind (%d items). Stash is safe." % lost, 6.0)
+						_push_float(world, pl["pos"], "DROP BAG", Color("e6b35a"), 2.0)
+						_push_float(world, pl["pos"] + Vector2(0, -14), "YOU DIED", Color("e85454"), 2.2)
+					consumed = true
+					break
+		if not consumed:
+			next.append(b)
 	world["bullets"] = next
 
 

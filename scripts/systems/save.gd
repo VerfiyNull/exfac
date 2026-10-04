@@ -3,16 +3,37 @@ extends RefCounted
 ## Solo persistence — locker, loadout, skills, run counters. Sanitize unknown ids on load.
 
 const SAVE_PATH := "user://exfac_save.json"
+const SAVE_TMP_PATH := "user://exfac_save.json.tmp"
 const SAVE_VERSION := 2
+
+## Last load failure reason (empty on success). Title/session use this for corrupt-save UX.
+static var last_load_error: String = ""
 
 
 static func has_save() -> bool:
 	return FileAccess.file_exists(SAVE_PATH)
 
 
-static func delete_save() -> void:
-	if has_save():
-		DirAccess.remove_absolute(SAVE_PATH)
+static func delete_save() -> bool:
+	if not has_save():
+		return true
+	var err := DirAccess.remove_absolute(SAVE_PATH)
+	if err != OK and has_save():
+		push_error("SaveGame: delete failed for %s (%s)" % [SAVE_PATH, error_string(err)])
+		return false
+	return true
+
+
+## Move a bad save aside so Continue doesn't keep offering a broken file.
+static func quarantine_save() -> void:
+	if not has_save():
+		return
+	var bad := "user://exfac_save.bad.json"
+	DirAccess.remove_absolute(bad)
+	var err := DirAccess.rename_absolute(SAVE_PATH, bad)
+	if err != OK:
+		push_error("SaveGame: quarantine rename failed (%s)" % error_string(err))
+		delete_save()
 
 
 static func save_meta(meta: Dictionary, last_raid: Dictionary = {}, raid_history: Array = []) -> bool:
@@ -30,34 +51,49 @@ static func save_meta(meta: Dictionary, last_raid: Dictionary = {}, raid_history
 		"raid_history": hist_out,
 	}
 	var json := JSON.stringify(payload)
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	# Atomic replace — crash mid-write must not truncate the real save.
+	var f := FileAccess.open(SAVE_TMP_PATH, FileAccess.WRITE)
 	if f == null:
-		push_error("SaveGame: failed to open %s (%s)" % [SAVE_PATH, FileAccess.get_open_error()])
+		push_error("SaveGame: failed to open %s (%s)" % [SAVE_TMP_PATH, FileAccess.get_open_error()])
 		return false
 	f.store_string(json)
+	f.close()
+	var err := DirAccess.rename_absolute(SAVE_TMP_PATH, SAVE_PATH)
+	if err != OK:
+		# Some platforms can't rename over an existing file — remove then rename.
+		DirAccess.remove_absolute(SAVE_PATH)
+		err = DirAccess.rename_absolute(SAVE_TMP_PATH, SAVE_PATH)
+	if err != OK:
+		push_error("SaveGame: atomic replace failed (%s)" % error_string(err))
+		return false
 	return true
 
 
 static func load_bundle() -> Dictionary:
 	## Returns { "meta": Dictionary, "last_raid": Dictionary, "raid_history": Array } or empty on failure.
+	last_load_error = ""
 	if not has_save():
 		return {}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
 	if f == null:
+		last_load_error = "unreadable"
 		push_error("SaveGame: failed to read %s (%s)" % [SAVE_PATH, FileAccess.get_open_error()])
 		return {}
 	var raw := f.get_as_text()
 	var parsed: Variant = JSON.parse_string(raw)
 	if typeof(parsed) != TYPE_DICTIONARY:
+		last_load_error = "corrupt"
 		push_error("SaveGame: corrupt save (not an object).")
 		return {}
 	var root: Dictionary = parsed
 	var ver := int(root.get("version", 0))
 	if ver < 1 or ver > SAVE_VERSION:
+		last_load_error = "unsupported"
 		push_error("SaveGame: unsupported version %s" % str(root.get("version")))
 		return {}
 	var meta_raw: Variant = root.get("meta", {})
 	if typeof(meta_raw) != TYPE_DICTIONARY:
+		last_load_error = "corrupt"
 		return {}
 	var raid_raw: Variant = root.get("last_raid", {})
 	var last_raid: Dictionary = {}
@@ -130,6 +166,9 @@ static func _sanitize_meta(meta: Dictionary) -> Dictionary:
 		"raids_completed": int(meta.get("raids_completed", 0)),
 		"raids_survived": int(meta.get("raids_survived", 0)),
 		"pack_scrap_qty": clampi(int(meta.get("pack_scrap_qty", 0)), 0, 2),
+		# In-flight deploy packs — must survive quit between Base → Field.
+		"packed_medkits": clampi(int(meta.get("packed_medkits", 0)), 0, 2),
+		"packed_scrap": clampi(int(meta.get("packed_scrap", 0)), 0, 2),
 	}
 
 
@@ -149,7 +188,8 @@ static func _hydrate_meta(raw: Dictionary) -> Dictionary:
 		var qty := int(s.get("qty", 0))
 		if qty <= 0:
 			continue
-		stash.append({"def_id": def_id, "qty": qty})
+		# Merge duplicate rows so count_in_stacks / pack logic stay honest.
+		Items.add_to_stash(stash, {"def_id": def_id, "qty": qty})
 	base["stash"] = stash
 
 	var loadout_raw: Dictionary = raw.get("loadout", {})
@@ -173,6 +213,8 @@ static func _hydrate_meta(raw: Dictionary) -> Dictionary:
 	base["raids_completed"] = maxi(0, int(raw.get("raids_completed", 0)))
 	base["raids_survived"] = maxi(0, int(raw.get("raids_survived", 0)))
 	base["pack_scrap_qty"] = clampi(int(raw.get("pack_scrap_qty", 0)), 0, 2)
+	base["packed_medkits"] = clampi(int(raw.get("packed_medkits", 0)), 0, 2)
+	base["packed_scrap"] = clampi(int(raw.get("packed_scrap", 0)), 0, 2)
 	return base
 
 

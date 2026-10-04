@@ -91,6 +91,19 @@ static func try_add_inventory(inv: Array, cap: int, incoming: Dictionary) -> boo
 	return true
 
 
+## Take what fits; returns qty left behind (0 = all taken). Avoids wiping overflow loot.
+static func try_add_inventory_partial(inv: Array, cap: int, incoming: Dictionary) -> int:
+	var qty := int(incoming.get("qty", 0))
+	if qty <= 0:
+		return 0
+	var space := maxi(0, cap - inventory_used(inv))
+	if space <= 0:
+		return qty
+	var take := mini(qty, space)
+	add_to_stash(inv, {"def_id": String(incoming["def_id"]), "qty": take})
+	return qty - take
+
+
 static func loadout_capacity(loadout: Dictionary) -> int:
 	var bag_id: Variant = loadout.get("bag_id")
 	if bag_id == null or String(bag_id).is_empty():
@@ -409,10 +422,21 @@ static func weapon_slot_name(def_id: Variant) -> String:
 
 
 static func count_in_stacks(stacks: Array, def_id: String) -> int:
+	var n := 0
 	for s in stacks:
 		if String(s["def_id"]) == def_id:
-			return int(s["qty"])
-	return 0
+			n += int(s["qty"])
+	return n
+
+
+## First stash index for def_id, or -1. Used to keep locker selection stable across sort.
+static func index_of_def(stacks: Array, def_id: String) -> int:
+	if def_id.is_empty():
+		return -1
+	for i in stacks.size():
+		if String(stacks[i]["def_id"]) == def_id:
+			return i
+	return -1
 
 
 static func consume_from_stacks(stacks: Array, def_id: String, qty: int = 1) -> bool:
