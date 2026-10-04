@@ -10,8 +10,10 @@ Solo extraction shooter. **Standalone** — not UltraSim.
 
 ## Run on your PC
 
-1. Open the **repo root** (the folder with `project.godot`) in Godot 4.3, or double-click `launch.bat` with Godot installed.
-2. **F5** → title → **Continue / Begin** → **Base** → deploy.
+1. `git pull origin main` — then open the **repo root** (the folder that contains `project.godot`, not an old unzip nested folder).
+2. In Godot: **Project → Reload Current Project** (or close + reopen) so scripts aren't stale.
+3. **F5** → title → **Continue / Begin** → **Base** → deploy.
+4. Punch check: HUD should read `FISTS  <stamina>` (a number, not a lone `·` under FISTS), and the field tip should say `Punch build: click · stamina · no shove`.
 
 ## Loop
 

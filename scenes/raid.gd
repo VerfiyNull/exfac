@@ -44,6 +44,11 @@ func _ready() -> void:
 	GameSession.meta["packed_scrap"] = 0
 	var skills: Dictionary = Skills.ensure(GameSession.meta)
 	world = RaidSim.create_raid_world(GameSession.meta["loadout"], packed, skills)
+	# One-shot build marker — if you never see this, Godot is opening an old folder.
+	if not bool(world.get("_punch_build_noted", false)):
+		world["_punch_build_noted"] = true
+		world["message"] = "Punch build: click · stamina · no shove"
+		world["message_ttl"] = 3.5
 	var need_persist := false
 	# Refund medkits that did not fit the bag (create_raid_world may truncate).
 	var med_refund := int(world.get("pack_refund_medkits", 0))
@@ -134,8 +139,13 @@ func _process(dt: float) -> void:
 		Input.get_action_strength("move_down") - Input.get_action_strength("move_up")
 	)
 	var aim := get_global_mouse_position()
-	var shoot := Input.is_action_pressed("shoot")
 	var shoot_click := Input.is_action_just_pressed("shoot")
+	var shoot_held := Input.is_action_pressed("shoot")
+	var armed_now := Items.loadout_has_weapon(world.get("loadout", {}))
+	var mag_now := int(world["player"].get("mag", 0))
+	# Guns can hold-fire; fists / empty-mag melee are click-edge only (scene + sim).
+	var melee_mode := (not armed_now) or mag_now <= 0
+	var shoot := shoot_click if melee_mode else shoot_held
 	var interact := Input.is_action_just_pressed("interact")
 	var use_medkit := Input.is_action_just_pressed("use_medkit")
 	var reload := Input.is_action_just_pressed("reload")
@@ -267,9 +277,11 @@ func _refresh_hud() -> void:
 	var rch := float(player.get("reload_channel", 0.0))
 	var armed := Items.loadout_has_weapon(world.get("loadout", {}))
 	if not armed:
-		ammo_label.text = "FISTS"
+		# Stamina on the FISTS line — proves this punch build is loaded (no AmmoSub dot).
+		ammo_label.text = "FISTS  %d" % int(ceil(float(player.get("stamina", 0.0))))
 		ammo_sub.visible = false
 		ammo_sub.text = ""
+		ammo_sub.custom_minimum_size = Vector2.ZERO
 		ammo_label.add_theme_color_override("font_color", Color(0.85, 0.88, 0.92, 1))
 	elif rch > 0.0:
 		ammo_label.text = "…"
@@ -527,14 +539,12 @@ func _draw() -> void:
 			# Muzzle tick only when a firearm is equipped — never for fists.
 			draw_line(ppos, ppos + paim * 22.0, Color("d0e8ff"), 2.5)
 		else:
-			# Punch arc / fist cue — no muzzle length that reads as a gun.
+			# Punch arc only while swinging — no idle tip-dot (read as a HUD speck under FISTS).
 			var swing := float(player.get("punch_swing", 0.0))
 			if swing > 0.0:
 				var a := paim.angle()
 				var span := 0.9
 				draw_arc(ppos, pr + 8.0, a - span, a + span, 16, Color(0.9, 0.95, 1.0, 0.7), 2.5)
-			else:
-				draw_circle(ppos + paim * (pr + 3.0), 2.8, Color(0.75, 0.82, 0.9, 0.55))
 		var channel := float(player.get("heal_channel", 0.0))
 		if channel > 0.0:
 			var pct := 1.0 - clampf(channel / RaidSim.MEDKIT_CHANNEL, 0.0, 1.0)

@@ -861,12 +861,12 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 		player["mag_size"] = 0
 	if float(player["fire_cooldown"]) <= 0.0 and (player["aim"] as Vector2).length_squared() > 1e-6:
 		if not armed:
-			# Unarmed: click-only punch — holding LMB must not auto-swing.
+			# Unarmed: click-edge only — holding LMB must not auto-swing.
 			if shoot_click:
 				if not _try_melee(world, true):
 					_swing_punch_miss(world)
 		elif int(player.get("mag", 0)) <= 0:
-			# Armed but dry — click-only buttstock / dry-fire (no hold spam).
+			# Armed but dry — click-edge only (no hold spam on buttstock / dry-fire).
 			if shoot_click:
 				if _try_melee(world, false):
 					pass
@@ -2446,6 +2446,9 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 		roamer["telegraph_ttl"] = maxf(0.0, float(roamer.get("telegraph_ttl", 0.0)) - dt)
 		if not bool(roamer["alive"]):
 			continue
+		# Re-assert root before AI — any leftover slide from last frame is undone.
+		if _roamer_melee_rooted(roamer) and roamer.has("melee_root_pos"):
+			roamer["pos"] = roamer["melee_root_pos"]
 		roamer["fire_cooldown"] = maxf(0.0, float(roamer["fire_cooldown"]) - dt)
 		var to_player: Vector2 = player["pos"] - roamer["pos"]
 		var d := to_player.length()
