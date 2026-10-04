@@ -129,6 +129,48 @@ func _initialize() -> void:
 			return false
 		return float(world["roamers"][0]["hp"]) < 40.0 or not bool(world["roamers"][0]["alive"])
 	)
+	failed += _check("punch shoves without teleporting", func() -> bool:
+		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": "sling_bag"}
+		var world := _RaidSim.create_raid_world(loadout)
+		var player: Dictionary = world["player"]
+		var start: Vector2 = player["pos"] + Vector2(28, 0)
+		world["obstacles"] = []
+		world["roamers"] = [{
+			"id": 99,
+			"alive": true,
+			"pos": start,
+			"radius": 12.0,
+			"hp": 80.0,
+			"max_hp": 80.0,
+			"mitigation": 0.0,
+			"aim": Vector2.LEFT,
+			"speed": 0.0,
+			"damage": 8.0,
+			"fire_cooldown": 99.0,
+			"hit_flash": 0.0,
+			"alert_ttl": 0.0,
+			"search_ttl": 0.0,
+			"call_cooldown": 0.0,
+			"suppress_ttl": 0.0,
+			"telegraph_ttl": 0.0,
+			"aggro_range": 220.0,
+			"hear_mult": 1.0,
+			"dormant": false,
+			"ai_state": "patrol",
+			"elite": false,
+			"role": "roamer",
+			"home": start,
+			"patrol_phase": 0.0,
+			"knock_vel": Vector2.ZERO,
+		}]
+		_RaidSim.step_raid(world, 0.05, Vector2.ZERO, player["pos"] + Vector2(40, 0), true, false, 2.0)
+		var roamer: Dictionary = world["roamers"][0]
+		var frame_jump: float = (roamer["pos"] as Vector2).distance_to(start)
+		# Old code teleported ~52px in one frame; impulse shove should stay under ~20px/frame.
+		var has_impulse := (roamer.get("knock_vel", Vector2.ZERO) as Vector2).length() > 10.0 \
+			or float(roamer["hp"]) < 80.0
+		return has_impulse and frame_jump < 20.0
+	)
 	failed += _check("unarmed LMB never spawns projectile", func() -> bool:
 		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": null}
 		var world := _RaidSim.create_raid_world(loadout)

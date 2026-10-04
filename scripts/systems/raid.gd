@@ -250,14 +250,16 @@ const NOISE_TTL_LOOT_DUMP := 0.45
 ## Empty-mag shove — last-ditch contact weapon when the chamber's dry.
 const MELEE_RANGE := 34.0
 const MELEE_DAMAGE := 22.0
-const MELEE_KNOCKBACK := 78.0
+## Impulse speed (px/s) — applied over a few frames so hits shove instead of teleport.
+const MELEE_KNOCK_SPEED := 220.0
 const MELEE_COOLDOWN := 0.9
 const HEAR_MELEE_RANGE := 200.0
 const NOISE_TTL_MELEE := 0.55
 ## Unarmed punch — no gun visible; LMB is fists with shorter reach and quieter tell.
 const PUNCH_RANGE := 38.0
 const PUNCH_DAMAGE := 16.0
-const PUNCH_KNOCKBACK := 52.0
+const PUNCH_KNOCK_SPEED := 150.0
+const KNOCK_VEL_DECAY := 14.0
 const PUNCH_COOLDOWN := 0.52
 const HEAR_PUNCH_RANGE := 110.0
 const NOISE_TTL_PUNCH := 0.35
@@ -1804,10 +1806,9 @@ static func _try_melee(world: Dictionary, unarmed: bool = false) -> bool:
 	var silent := was_dormant and behind \
 		and bool(player.get("crouching", false)) and not bool(player.get("sprinting", false)) \
 		and not bool(target.get("elite", false))
-	var knock := (PUNCH_KNOCKBACK if unarmed else MELEE_KNOCKBACK) * (0.35 if silent else 1.0)
-	target["pos"] = target["pos"] + push * knock
-	_collide_actor_obstacles(target, world["obstacles"])
-	_clamp_to_map(target, float(world["width"]), float(world["height"]))
+	# Impulse shove — never teleport pos in one frame (that read as a warp).
+	var knock_spd := (PUNCH_KNOCK_SPEED if unarmed else MELEE_KNOCK_SPEED) * (0.35 if silent else 1.0)
+	target["knock_vel"] = push * knock_spd
 	var base_dmg := PUNCH_SILENT_DAMAGE if (unarmed and silent) else (PUNCH_DAMAGE if unarmed else (MELEE_SILENT_DAMAGE if silent else MELEE_DAMAGE))
 	var dmg := base_dmg * (0.7 if bool(target.get("elite", false)) else 1.0)
 	target["hp"] = float(target["hp"]) - dmg
@@ -2129,6 +2130,7 @@ static func _make_actor(world: Dictionary, kind: String, pos: Vector2, extras: D
 		"kind": kind,
 		"pos": pos,
 		"vel": Vector2.ZERO,
+		"knock_vel": Vector2.ZERO,
 		"hp": float(extras.get("hp", 100.0)),
 		"max_hp": float(extras.get("max_hp", 100.0)),
 		"radius": float(extras.get("radius", 14.0)),
@@ -2521,9 +2523,19 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 				_:
 					_roamer_do_patrol(world, roamer, dt)
 
+		_apply_knock_vel(roamer, dt)
 		_collide_actor_obstacles(roamer, world["obstacles"])
 		_clamp_to_map(roamer, float(world["width"]), float(world["height"]))
 	world["extract_contest_count"] = contest_count
+
+
+static func _apply_knock_vel(actor: Dictionary, dt: float) -> void:
+	var kv: Vector2 = actor.get("knock_vel", Vector2.ZERO)
+	if kv.length_squared() < 1.0:
+		actor["knock_vel"] = Vector2.ZERO
+		return
+	actor["pos"] = actor["pos"] + kv * dt
+	actor["knock_vel"] = kv * exp(-KNOCK_VEL_DECAY * dt)
 
 
 static func _roamer_pick_state(world: Dictionary, roamer: Dictionary, sees_player: bool, hears: bool, player_alive: bool) -> void:
