@@ -5,6 +5,7 @@ extends Control
 @onready var save_hint: Label = %SaveHint
 @onready var continue_button: Button = %ContinueButton
 @onready var new_button: Button = %NewButton
+@onready var version_label: Label = %VersionLabel
 
 var _has_save := false
 var _new_armed := false
@@ -12,6 +13,7 @@ var _pulse := 0.0
 
 
 func _ready() -> void:
+	version_label.text = "v%s" % GameSession.APP_VERSION
 	_has_save = false
 	_new_armed = false
 	var meta_preview := {}
