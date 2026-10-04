@@ -1,0 +1,88 @@
+[gd_scene load_steps=2 format=3 uid="uid://bqtitle0000001"]
+
+[ext_resource type="Script" path="res://scenes/title.gd" id="1_title"]
+
+[node name="Title" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_title")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.035, 0.05, 0.07, 1)
+
+[node name="Wash" type="ColorRect" parent="."]
+layout_mode = 0
+offset_right = 1280.0
+offset_bottom = 720.0
+color = Color(0.05, 0.09, 0.1, 0.55)
+
+[node name="Accent" type="ColorRect" parent="."]
+layout_mode = 0
+offset_left = 64.0
+offset_top = 210.0
+offset_right = 70.0
+offset_bottom = 390.0
+color = Color(0.24, 0.81, 0.56, 1)
+
+[node name="Brand" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 96.0
+offset_top = 220.0
+offset_right = 900.0
+offset_bottom = 320.0
+theme_override_colors/font_color = Color(0.96, 0.98, 0.99, 1)
+theme_override_font_sizes/font_size = 84
+text = "EXFac"
+
+[node name="Tag" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 100.0
+offset_top = 330.0
+offset_right = 980.0
+offset_bottom = 370.0
+theme_override_colors/font_color = Color(0.48, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 20
+text = "Risk the field. Keep what you earn."
+
+[node name="SaveHint" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 100.0
+offset_top = 420.0
+offset_right = 900.0
+offset_bottom = 460.0
+theme_override_colors/font_color = Color(0.42, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 15
+text = ""
+
+[node name="ContinueButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 100.0
+offset_top = 520.0
+offset_right = 320.0
+offset_bottom = 576.0
+theme_override_font_sizes/font_size = 16
+text = "Continue"
+
+[node name="NewButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 340.0
+offset_top = 520.0
+offset_right = 540.0
+offset_bottom = 576.0
+theme_override_font_sizes/font_size = 16
+text = "New run"
