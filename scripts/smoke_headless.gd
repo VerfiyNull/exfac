@@ -129,7 +129,7 @@ func _initialize() -> void:
 			return false
 		return float(world["roamers"][0]["hp"]) < 40.0 or not bool(world["roamers"][0]["alive"])
 	)
-	failed += _check("punch shoves without teleporting", func() -> bool:
+	failed += _check("punch slows without shoving", func() -> bool:
 		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": "sling_bag"}
 		var world := _RaidSim.create_raid_world(loadout)
 		var player: Dictionary = world["player"]
@@ -144,7 +144,7 @@ func _initialize() -> void:
 			"max_hp": 80.0,
 			"mitigation": 0.0,
 			"aim": Vector2.LEFT,
-			"speed": 0.0,
+			"speed": 100.0,
 			"damage": 8.0,
 			"fire_cooldown": 99.0,
 			"hit_flash": 0.0,
@@ -161,15 +161,17 @@ func _initialize() -> void:
 			"role": "roamer",
 			"home": start,
 			"patrol_phase": 0.0,
-			"knock_vel": Vector2.ZERO,
+			"melee_slow_ttl": 0.0,
 		}]
 		_RaidSim.step_raid(world, 0.05, Vector2.ZERO, player["pos"] + Vector2(40, 0), true, false, 2.0)
 		var roamer: Dictionary = world["roamers"][0]
 		var frame_jump: float = (roamer["pos"] as Vector2).distance_to(start)
-		# Old code teleported ~52px in one frame; impulse shove should stay under ~20px/frame.
-		var has_impulse := (roamer.get("knock_vel", Vector2.ZERO) as Vector2).length() > 10.0 \
-			or float(roamer["hp"]) < 80.0
-		return has_impulse and frame_jump < 20.0
+		var slow_ttl := float(roamer.get("melee_slow_ttl", 0.0))
+		# No knockback teleport; contact applies ~0.5s slow (minus the step dt).
+		return float(roamer["hp"]) < 80.0 \
+			and frame_jump < 8.0 \
+			and slow_ttl > 0.35 and slow_ttl <= _RaidSim.MELEE_SLOW_TTL \
+			and is_equal_approx(_RaidSim._roamer_speed(roamer), 100.0 * _RaidSim.MELEE_SLOW_MULT)
 	)
 	failed += _check("unarmed LMB never spawns projectile", func() -> bool:
 		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": null}

@@ -250,16 +250,15 @@ const NOISE_TTL_LOOT_DUMP := 0.45
 ## Empty-mag shove — last-ditch contact weapon when the chamber's dry.
 const MELEE_RANGE := 34.0
 const MELEE_DAMAGE := 22.0
-## Impulse speed (px/s) — applied over a few frames so hits shove instead of teleport.
-const MELEE_KNOCK_SPEED := 220.0
+## Contact hit — no knockback; briefly hobble their move speed instead.
+const MELEE_SLOW_TTL := 0.5
+const MELEE_SLOW_MULT := 0.4
 const MELEE_COOLDOWN := 0.9
 const HEAR_MELEE_RANGE := 200.0
 const NOISE_TTL_MELEE := 0.55
 ## Unarmed punch — no gun visible; LMB is fists with shorter reach and quieter tell.
 const PUNCH_RANGE := 38.0
 const PUNCH_DAMAGE := 16.0
-const PUNCH_KNOCK_SPEED := 150.0
-const KNOCK_VEL_DECAY := 14.0
 const PUNCH_COOLDOWN := 0.52
 const HEAR_PUNCH_RANGE := 110.0
 const NOISE_TTL_PUNCH := 0.35
@@ -1795,8 +1794,6 @@ static func _try_melee(world: Dictionary, unarmed: bool = false) -> bool:
 	if best == null:
 		return false
 	var target: Dictionary = best
-	var to_t: Vector2 = target["pos"] - player["pos"]
-	var push := to_t.normalized() if to_t.length_squared() > 1e-6 else aim
 	# Behind a sleeper while crouched — drop them soft instead of a stadium shove.
 	var was_dormant := bool(target.get("dormant", false))
 	var from_t: Vector2 = (player["pos"] as Vector2) - (target["pos"] as Vector2)
@@ -1806,9 +1803,8 @@ static func _try_melee(world: Dictionary, unarmed: bool = false) -> bool:
 	var silent := was_dormant and behind \
 		and bool(player.get("crouching", false)) and not bool(player.get("sprinting", false)) \
 		and not bool(target.get("elite", false))
-	# Impulse shove — never teleport pos in one frame (that read as a warp).
-	var knock_spd := (PUNCH_KNOCK_SPEED if unarmed else MELEE_KNOCK_SPEED) * (0.35 if silent else 1.0)
-	target["knock_vel"] = push * knock_spd
+	# No knockback — hobble movement for a beat so contact still feels like a hit.
+	target["melee_slow_ttl"] = MELEE_SLOW_TTL
 	var base_dmg := PUNCH_SILENT_DAMAGE if (unarmed and silent) else (PUNCH_DAMAGE if unarmed else (MELEE_SILENT_DAMAGE if silent else MELEE_DAMAGE))
 	var dmg := base_dmg * (0.7 if bool(target.get("elite", false)) else 1.0)
 	target["hp"] = float(target["hp"]) - dmg
@@ -2130,7 +2126,7 @@ static func _make_actor(world: Dictionary, kind: String, pos: Vector2, extras: D
 		"kind": kind,
 		"pos": pos,
 		"vel": Vector2.ZERO,
-		"knock_vel": Vector2.ZERO,
+		"melee_slow_ttl": 0.0,
 		"hp": float(extras.get("hp", 100.0)),
 		"max_hp": float(extras.get("max_hp", 100.0)),
 		"radius": float(extras.get("radius", 14.0)),
@@ -2423,6 +2419,7 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 		roamer["call_cooldown"] = maxf(0.0, float(roamer.get("call_cooldown", 0.0)) - dt)
 		roamer["suppress_ttl"] = maxf(0.0, float(roamer.get("suppress_ttl", 0.0)) - dt)
 		roamer["telegraph_ttl"] = maxf(0.0, float(roamer.get("telegraph_ttl", 0.0)) - dt)
+		_tick_roamer_melee_slow(roamer, dt)
 		if not bool(roamer["alive"]):
 			continue
 		roamer["fire_cooldown"] = maxf(0.0, float(roamer["fire_cooldown"]) - dt)
@@ -2490,9 +2487,9 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 			var to_extract: Vector2 = extract_pos - (roamer["pos"] as Vector2)
 			roamer["aim"] = to_player.normalized() if d > 1e-6 else to_extract.normalized()
 			if d > 85.0:
-				roamer["pos"] = roamer["pos"] + (roamer["aim"] as Vector2) * float(roamer["speed"]) * 1.35 * dt
+				roamer["pos"] = roamer["pos"] + (roamer["aim"] as Vector2) * _roamer_speed(roamer) * 1.35 * dt
 			elif d < 55.0:
-				roamer["pos"] = roamer["pos"] - (roamer["aim"] as Vector2) * float(roamer["speed"]) * 0.35 * dt
+				roamer["pos"] = roamer["pos"] - (roamer["aim"] as Vector2) * _roamer_speed(roamer) * 0.35 * dt
 			# Rush fire needs LOS — close range alone must not shoot through walls.
 			if float(roamer["fire_cooldown"]) <= 0.0 and sees_player:
 				var rdir := (roamer["aim"] as Vector2).rotated(randf_range(-_roamer_shot_spread(roamer), _roamer_shot_spread(roamer)))
@@ -2523,19 +2520,24 @@ static func _update_roamers(world: Dictionary, dt: float) -> void:
 				_:
 					_roamer_do_patrol(world, roamer, dt)
 
-		_apply_knock_vel(roamer, dt)
 		_collide_actor_obstacles(roamer, world["obstacles"])
 		_clamp_to_map(roamer, float(world["width"]), float(world["height"]))
 	world["extract_contest_count"] = contest_count
 
 
-static func _apply_knock_vel(actor: Dictionary, dt: float) -> void:
-	var kv: Vector2 = actor.get("knock_vel", Vector2.ZERO)
-	if kv.length_squared() < 1.0:
-		actor["knock_vel"] = Vector2.ZERO
+static func _roamer_speed(roamer: Dictionary) -> float:
+	var spd := float(roamer.get("speed", 0.0))
+	if float(roamer.get("melee_slow_ttl", 0.0)) > 0.0:
+		spd *= MELEE_SLOW_MULT
+	return spd
+
+
+static func _tick_roamer_melee_slow(roamer: Dictionary, dt: float) -> void:
+	var ttl := float(roamer.get("melee_slow_ttl", 0.0))
+	if ttl <= 0.0:
+		roamer["melee_slow_ttl"] = 0.0
 		return
-	actor["pos"] = actor["pos"] + kv * dt
-	actor["knock_vel"] = kv * exp(-KNOCK_VEL_DECAY * dt)
+	roamer["melee_slow_ttl"] = maxf(0.0, ttl - dt)
 
 
 static func _roamer_pick_state(world: Dictionary, roamer: Dictionary, sees_player: bool, hears: bool, player_alive: bool) -> void:
@@ -2613,14 +2615,14 @@ static func _roamer_do_combat(world: Dictionary, roamer: Dictionary, player: Dic
 	roamer["aim"] = to_player.normalized() if d > 1e-6 else Vector2.RIGHT
 	# Hold a mid-range pocket; strafe so they aren't pure laser drones.
 	if d > ROAMER_COMBAT_HOLD_RANGE:
-		roamer["pos"] = roamer["pos"] + roamer["aim"] * float(roamer["speed"]) * dt
+		roamer["pos"] = roamer["pos"] + roamer["aim"] * _roamer_speed(roamer) * dt
 	elif d < ROAMER_COMBAT_BACK_RANGE:
-		roamer["pos"] = roamer["pos"] - roamer["aim"] * float(roamer["speed"]) * 0.55 * dt
+		roamer["pos"] = roamer["pos"] - roamer["aim"] * _roamer_speed(roamer) * 0.55 * dt
 	else:
 		var side := (roamer["aim"] as Vector2).orthogonal().normalized()
 		if int(roamer["id"]) % 2 == 0:
 			side = -side
-		roamer["pos"] = roamer["pos"] + side * float(roamer["speed"]) * 0.45 * dt
+		roamer["pos"] = roamer["pos"] + side * _roamer_speed(roamer) * 0.45 * dt
 	if float(roamer["fire_cooldown"]) <= 0.0:
 		var sdir := (roamer["aim"] as Vector2).rotated(randf_range(-_roamer_shot_spread(roamer), _roamer_shot_spread(roamer)))
 		var shot_speed := 480.0 if bool(roamer.get("elite", false)) else 420.0
@@ -2638,7 +2640,7 @@ static func _roamer_do_flank(world: Dictionary, roamer: Dictionary, player: Dict
 	var anchor: Vector2 = player["pos"] + side * ROAMER_FLANK_RANGE
 	var to_anchor: Vector2 = anchor - (roamer["pos"] as Vector2)
 	if to_anchor.length() > 12.0:
-		roamer["pos"] = roamer["pos"] + to_anchor.normalized() * float(roamer["speed"]) * ROAMER_FLANK_SPEED * dt
+		roamer["pos"] = roamer["pos"] + to_anchor.normalized() * _roamer_speed(roamer) * ROAMER_FLANK_SPEED * dt
 	if float(roamer["fire_cooldown"]) <= 0.0 and d < ROAMER_FLANK_RANGE * 1.35:
 		var sdir := (roamer["aim"] as Vector2).rotated(randf_range(-_roamer_shot_spread(roamer), _roamer_shot_spread(roamer)))
 		_spawn_bullet(world, roamer, sdir, false, 430.0)
@@ -2651,12 +2653,12 @@ static func _roamer_do_retreat(world: Dictionary, roamer: Dictionary, player: Di
 	# Break contact — open range hard, then sidestep while keeping eyes on you.
 	var away := -(roamer["aim"] as Vector2)
 	if d < ROAMER_RETREAT_RANGE:
-		roamer["pos"] = roamer["pos"] + away * float(roamer["speed"]) * ROAMER_RETREAT_SPEED * dt
+		roamer["pos"] = roamer["pos"] + away * _roamer_speed(roamer) * ROAMER_RETREAT_SPEED * dt
 	else:
 		var side := (roamer["aim"] as Vector2).orthogonal().normalized()
 		if int(roamer["id"]) % 2 == 0:
 			side = -side
-		roamer["pos"] = roamer["pos"] + (away * 0.35 + side * 0.65) * float(roamer["speed"]) * dt
+		roamer["pos"] = roamer["pos"] + (away * 0.35 + side * 0.65) * _roamer_speed(roamer) * dt
 	if float(roamer["fire_cooldown"]) <= 0.0 and d < ROAMER_RETREAT_RANGE * 1.15:
 		var sdir := (roamer["aim"] as Vector2).rotated(randf_range(-_roamer_shot_spread(roamer) - 0.08, _roamer_shot_spread(roamer) + 0.08))
 		_spawn_bullet(world, roamer, sdir, false, 400.0)
@@ -2727,7 +2729,7 @@ static func _roamer_do_forage(world: Dictionary, roamer: Dictionary, dt: float) 
 	var dist := to_t.length()
 	if dist > ROAMER_SCAVENGE_RANGE:
 		roamer["aim"] = to_t.normalized()
-		roamer["pos"] = roamer["pos"] + roamer["aim"] * float(roamer["speed"]) * 0.85 * dt
+		roamer["pos"] = roamer["pos"] + roamer["aim"] * _roamer_speed(roamer) * 0.85 * dt
 		return
 	roamer["forage_ttl"] = float(roamer.get("forage_ttl", 0.0)) + dt
 	if float(roamer["forage_ttl"]) < ROAMER_FORAGE_TIME:
@@ -2746,7 +2748,7 @@ static func _roamer_do_investigate(world: Dictionary, roamer: Dictionary, target
 	var nd := to_noise.length()
 	if nd > 28.0:
 		roamer["aim"] = to_noise.normalized()
-		roamer["pos"] = roamer["pos"] + roamer["aim"] * float(roamer["speed"]) * 1.05 * dt
+		roamer["pos"] = roamer["pos"] + roamer["aim"] * _roamer_speed(roamer) * 1.05 * dt
 	else:
 		# Arrive: pause and scan — keeps search from instantly flipping to idle.
 		roamer["alert_ttl"] = maxf(float(roamer.get("alert_ttl", 0.0)), 0.6)
@@ -2763,7 +2765,7 @@ static func _roamer_do_search(world: Dictionary, roamer: Dictionary, dt: float) 
 	var to_t: Vector2 = target - roamer["pos"]
 	if to_t.length() > 8.0:
 		roamer["aim"] = to_t.normalized()
-		roamer["pos"] = roamer["pos"] + roamer["aim"] * float(roamer["speed"]) * 0.7 * dt
+		roamer["pos"] = roamer["pos"] + roamer["aim"] * _roamer_speed(roamer) * 0.7 * dt
 
 
 static func _roamer_do_patrol(_world: Dictionary, roamer: Dictionary, dt: float) -> void:
@@ -2777,7 +2779,7 @@ static func _roamer_do_patrol(_world: Dictionary, roamer: Dictionary, dt: float)
 	var to_t: Vector2 = target - roamer["pos"]
 	if to_t.length() > 6.0:
 		roamer["aim"] = to_t.normalized()
-		roamer["pos"] = roamer["pos"] + roamer["aim"] * float(roamer["speed"]) * (0.55 if bool(roamer.get("elite", false)) else 0.45) * dt
+		roamer["pos"] = roamer["pos"] + roamer["aim"] * _roamer_speed(roamer) * (0.55 if bool(roamer.get("elite", false)) else 0.45) * dt
 
 
 static func _bullet_hits_obstacle(p: Vector2, obstacles: Array) -> bool:
