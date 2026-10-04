@@ -670,6 +670,7 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 			player["facing"] = (player["aim"] as Vector2).angle()
 			if float(player["heal_channel"]) <= 0.0:
 				_finish_medkit(world)
+			_tick_blood_trail(world, dt)
 			_tick_noise(world, dt)
 			_update_extract_compass(world)
 			_update_extracts(world, dt)
@@ -739,6 +740,7 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 			player["facing"] = (player["aim"] as Vector2).angle()
 			if float(player["reload_channel"]) <= 0.0:
 				_finish_reload(world)
+			_tick_blood_trail(world, dt)
 			_tick_noise(world, dt)
 			_update_extract_compass(world)
 			_update_extracts(world, dt)
@@ -1574,6 +1576,8 @@ static func _tick_loot_channel(world: Dictionary, dt: float, move: Vector2, aim_
 
 
 static func _post_channel_world(world: Dictionary, dt: float) -> void:
+	# Scent while channeling — wounded trails must still drip during loot/heal/reload.
+	_tick_blood_trail(world, dt)
 	_tick_noise(world, dt)
 	_update_extract_compass(world)
 	_update_extracts(world, dt)
