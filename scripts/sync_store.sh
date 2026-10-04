@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Sync canonical /workspace/exfac → store EXFac/ (byte copy; skips .git).
+# Sync repo root (Godot project) → store EXFac/ (byte copy; skips .git).
 set -euo pipefail
-WS="${1:-/workspace/exfac}"
+WS="${1:-/workspace}"
 ST="${2:-/cursor/stores/self/EXFac}"
 python3 - "$WS" "$ST" <<'PY'
 import os, sys, shutil

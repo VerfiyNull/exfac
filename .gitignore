@@ -1,0 +1,11 @@
+# Godot 4 — editor cache only; keep *.import sidecars if they appear
+.godot/
+*.translation
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
