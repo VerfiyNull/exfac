@@ -18,389 +18,433 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
 color = Color(0.04, 0.055, 0.075, 1)
 
 [node name="Accent" type="ColorRect" parent="."]
-layout_mode = 0
+layout_mode = 1
+anchors_preset = 9
+anchor_bottom = 1.0
 offset_right = 4.0
-offset_bottom = 720.0
+grow_vertical = 2
+mouse_filter = 2
 color = Color(0.24, 0.81, 0.56, 1)
 
-[node name="TitleLabel" type="Label" parent="."]
+[node name="Root" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 14
+
+[node name="RootVBox" type="VBoxContainer" parent="Root"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="HeaderRow" type="HBoxContainer" parent="Root/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="TitleLabel" type="Label" parent="Root/RootVBox/HeaderRow"]
 unique_name_in_owner = true
-layout_mode = 0
-offset_left = 28.0
-offset_top = 16.0
-offset_right = 220.0
-offset_bottom = 52.0
+layout_mode = 2
 theme_override_colors/font_color = Color(0.94, 0.97, 0.99, 1)
-theme_override_font_sizes/font_size = 28
+theme_override_font_sizes/font_size = 26
 text = "BASE"
 
-[node name="StatsLabel" type="Label" parent="."]
+[node name="StatsLabel" type="Label" parent="Root/RootVBox/HeaderRow"]
 unique_name_in_owner = true
-layout_mode = 0
-offset_left = 240.0
-offset_top = 24.0
-offset_right = 900.0
-offset_bottom = 48.0
+layout_mode = 2
+size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.55, 0.66, 0.74, 1)
-theme_override_font_sizes/font_size = 15
+theme_override_font_sizes/font_size = 14
+vertical_alignment = 1
 text = ""
 
-[node name="EscHint" type="Label" parent="."]
+[node name="EscHint" type="Label" parent="Root/RootVBox/HeaderRow"]
 unique_name_in_owner = true
-layout_mode = 0
-offset_left = 1080.0
-offset_top = 24.0
-offset_right = 1250.0
-offset_bottom = 48.0
+layout_mode = 2
 theme_override_colors/font_color = Color(0.4, 0.5, 0.56, 1)
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 horizontal_alignment = 2
+vertical_alignment = 1
 text = "Esc  menu"
 
-[node name="StatusLabel" type="Label" parent="."]
+[node name="StatusRow" type="HBoxContainer" parent="Root/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="StatusLabel" type="Label" parent="Root/RootVBox/StatusRow"]
 unique_name_in_owner = true
-layout_mode = 0
-offset_left = 28.0
-offset_top = 56.0
-offset_right = 900.0
-offset_bottom = 80.0
+layout_mode = 2
+size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.72, 0.8, 0.86, 1)
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
+text_overrun_behavior = 3
 text = ""
 
-[node name="HistoryLabel" type="Label" parent="."]
+[node name="HistoryLabel" type="Label" parent="Root/RootVBox/StatusRow"]
 unique_name_in_owner = true
-layout_mode = 0
-offset_left = 920.0
-offset_top = 56.0
-offset_right = 1250.0
-offset_bottom = 80.0
+layout_mode = 2
 theme_override_colors/font_color = Color(0.45, 0.58, 0.64, 1)
 theme_override_font_sizes/font_size = 12
 horizontal_alignment = 2
 text = ""
 
-[node name="LockerPanel" type="PanelContainer" parent="."]
-unique_name_in_owner = true
-layout_mode = 0
-offset_left = 24.0
-offset_top = 96.0
-offset_right = 560.0
-offset_bottom = 680.0
+[node name="MainRow" type="HBoxContainer" parent="Root/RootVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 12
 
-[node name="LockerVBox" type="VBoxContainer" parent="LockerPanel"]
+[node name="LockerPanel" type="PanelContainer" parent="Root/RootVBox/MainRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 1.15
+size_flags_vertical = 3
+
+[node name="LockerVBox" type="VBoxContainer" parent="Root/RootVBox/MainRow/LockerPanel"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="LockerHeader" type="Label" parent="LockerPanel/LockerVBox"]
+[node name="LockerHeader" type="Label" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.7, 0.8, 0.86, 1)
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 text = "LOCKER"
 
-
-[node name="FilterRow" type="HBoxContainer" parent="LockerPanel/LockerVBox"]
+[node name="FilterRow" type="HBoxContainer" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox"]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="FilterAllButton" type="Button" parent="LockerPanel/LockerVBox/FilterRow"]
+[node name="FilterAllButton" type="Button" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox/FilterRow"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(64, 28)
+custom_minimum_size = Vector2(56, 28)
 layout_mode = 2
+size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 12
 text = "All"
 
-[node name="FilterGearButton" type="Button" parent="LockerPanel/LockerVBox/FilterRow"]
+[node name="FilterGearButton" type="Button" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox/FilterRow"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(64, 28)
+custom_minimum_size = Vector2(56, 28)
 layout_mode = 2
+size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 12
 text = "Gear"
 
-[node name="FilterLootButton" type="Button" parent="LockerPanel/LockerVBox/FilterRow"]
+[node name="FilterLootButton" type="Button" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox/FilterRow"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(64, 28)
+custom_minimum_size = Vector2(56, 28)
 layout_mode = 2
+size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 12
 text = "Loot"
 
-[node name="StashList" type="ItemList" parent="LockerPanel/LockerVBox"]
+[node name="StashList" type="ItemList" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 390)
+custom_minimum_size = Vector2(0, 200)
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_font_sizes/font_size = 14
 allow_reselect = true
 
-[node name="SelectedLabel" type="Label" parent="LockerPanel/LockerVBox"]
+[node name="SelectedLabel" type="Label" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.7, 0.76, 1)
 theme_override_font_sizes/font_size = 12
+text_overrun_behavior = 3
 text = ""
 
-[node name="LockerActions" type="HBoxContainer" parent="LockerPanel/LockerVBox"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="EquipButton" type="Button" parent="LockerPanel/LockerVBox/LockerActions"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "Equip"
-
-[node name="SellButton" type="Button" parent="LockerPanel/LockerVBox/LockerActions"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "Sell"
-
-[node name="SalvageButton" type="Button" parent="LockerPanel/LockerVBox/LockerActions"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(140, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "Salvage loot"
-
-[node name="QuickKitButton" type="Button" parent="LockerPanel/LockerVBox/LockerActions"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(100, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "Auto-kit"
-
-[node name="KitPanel" type="PanelContainer" parent="."]
-unique_name_in_owner = true
-layout_mode = 0
-offset_left = 580.0
-offset_top = 96.0
-offset_right = 900.0
-offset_bottom = 470.0
-
-[node name="KitVBox" type="VBoxContainer" parent="KitPanel"]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="KitHeader" type="Label" parent="KitPanel/KitVBox"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.7, 0.8, 0.86, 1)
-theme_override_font_sizes/font_size = 13
-text = "ON YOU"
-
-[node name="WeaponRow" type="HBoxContainer" parent="KitPanel/KitVBox"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="WeaponIcon" type="Label" parent="KitPanel/KitVBox/WeaponRow"]
-custom_minimum_size = Vector2(36, 0)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.35, 0.85, 0.65, 1)
-theme_override_font_sizes/font_size = 18
-text = "W"
-
-[node name="WeaponLabel" type="Label" parent="KitPanel/KitVBox/WeaponRow"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_colors/font_color = Color(0.9, 0.93, 0.96, 1)
-theme_override_font_sizes/font_size = 14
-text = "—"
-
-[node name="UnequipWeaponButton" type="Button" parent="KitPanel/KitVBox/WeaponRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(36, 32)
-layout_mode = 2
-theme_override_font_sizes/font_size = 12
-text = "×"
-
-[node name="ArmorRow" type="HBoxContainer" parent="KitPanel/KitVBox"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="ArmorIcon" type="Label" parent="KitPanel/KitVBox/ArmorRow"]
-custom_minimum_size = Vector2(36, 0)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.35, 0.85, 0.65, 1)
-theme_override_font_sizes/font_size = 18
-text = "A"
-
-[node name="ArmorLabel" type="Label" parent="KitPanel/KitVBox/ArmorRow"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_colors/font_color = Color(0.9, 0.93, 0.96, 1)
-theme_override_font_sizes/font_size = 14
-text = "—"
-
-[node name="UnequipArmorButton" type="Button" parent="KitPanel/KitVBox/ArmorRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(36, 32)
-layout_mode = 2
-theme_override_font_sizes/font_size = 12
-text = "×"
-
-[node name="BagRow" type="HBoxContainer" parent="KitPanel/KitVBox"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="BagIcon" type="Label" parent="KitPanel/KitVBox/BagRow"]
-custom_minimum_size = Vector2(36, 0)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.35, 0.85, 0.65, 1)
-theme_override_font_sizes/font_size = 18
-text = "B"
-
-[node name="BagLabel" type="Label" parent="KitPanel/KitVBox/BagRow"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_colors/font_color = Color(0.9, 0.93, 0.96, 1)
-theme_override_font_sizes/font_size = 14
-text = "—"
-
-[node name="UnequipBagButton" type="Button" parent="KitPanel/KitVBox/BagRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(36, 32)
-layout_mode = 2
-theme_override_font_sizes/font_size = 12
-text = "×"
-
-[node name="RiskLabel" type="Label" parent="KitPanel/KitVBox"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.85, 0.7, 0.4, 1)
-theme_override_font_sizes/font_size = 12
-text = ""
-
-[node name="PackLabel" type="Label" parent="KitPanel/KitVBox"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.5, 0.62, 0.7, 1)
-theme_override_font_sizes/font_size = 12
-text = ""
-
-[node name="StoresHeader" type="Label" parent="KitPanel/KitVBox"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.7, 0.8, 0.86, 1)
-theme_override_font_sizes/font_size = 13
-text = "STORES"
-
-[node name="StoresRow" type="HBoxContainer" parent="KitPanel/KitVBox"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="BuyMedButton" type="Button" parent="KitPanel/KitVBox/StoresRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(140, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "+ Med"
-
-[node name="BuyAmmoButton" type="Button" parent="KitPanel/KitVBox/StoresRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(140, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "+ Ammo"
-
-
-[node name="StoresRow2" type="HBoxContainer" parent="KitPanel/KitVBox"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="BuyFlareButton" type="Button" parent="KitPanel/KitVBox/StoresRow2"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(140, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "+ Flare"
-
-[node name="PackScrapButton" type="Button" parent="KitPanel/KitVBox/StoresRow2"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(140, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "Pack scrap"
-
-
-[node name="SkillsPanel" type="PanelContainer" parent="."]
-unique_name_in_owner = true
-layout_mode = 0
-offset_left = 920.0
-offset_top = 96.0
-offset_right = 1256.0
-offset_bottom = 520.0
-
-[node name="SkillsVBox" type="VBoxContainer" parent="SkillsPanel"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="SkillsHeader" type="Label" parent="SkillsPanel/SkillsVBox"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.7, 0.8, 0.86, 1)
-theme_override_font_sizes/font_size = 13
-text = "SKILLS"
-
-[node name="SkillsPoints" type="Label" parent="SkillsPanel/SkillsVBox"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.55, 0.7, 0.78, 1)
-theme_override_font_sizes/font_size = 12
-text = ""
-
-[node name="TrainButton" type="Button" parent="SkillsPanel/SkillsVBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 36)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "Train"
-
-[node name="SkillsList" type="VBoxContainer" parent="SkillsPanel/SkillsVBox"]
-unique_name_in_owner = true
+[node name="LockerActions" type="HBoxContainer" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox"]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="DeployPanel" type="PanelContainer" parent="."]
+[node name="EquipButton" type="Button" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox/LockerActions"]
 unique_name_in_owner = true
-layout_mode = 0
-offset_left = 580.0
-offset_top = 488.0
-offset_right = 1256.0
-offset_bottom = 700.0
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 12
+text = "Equip"
 
-[node name="DeployVBox" type="VBoxContainer" parent="DeployPanel"]
+[node name="SellButton" type="Button" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox/LockerActions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 12
+text = "Sell"
+
+[node name="SalvageButton" type="Button" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox/LockerActions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 12
+text = "Salvage"
+
+[node name="QuickKitButton" type="Button" parent="Root/RootVBox/MainRow/LockerPanel/LockerVBox/LockerActions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 12
+text = "Auto-kit"
+
+[node name="RightCol" type="VBoxContainer" parent="Root/RootVBox/MainRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="KitPanel" type="PanelContainer" parent="Root/RootVBox/MainRow/RightCol"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="KitVBox" type="VBoxContainer" parent="Root/RootVBox/MainRow/RightCol/KitPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="KitHeader" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.8, 0.86, 1)
+theme_override_font_sizes/font_size = 12
+text = "ON YOU"
+
+[node name="WeaponRow" type="HBoxContainer" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="WeaponIcon" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/WeaponRow"]
+custom_minimum_size = Vector2(28, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.35, 0.85, 0.65, 1)
+theme_override_font_sizes/font_size = 16
+text = "W"
+
+[node name="WeaponLabel" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/WeaponRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.93, 0.96, 1)
+theme_override_font_sizes/font_size = 13
+text_overrun_behavior = 3
+text = "—"
+
+[node name="UnequipWeaponButton" type="Button" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/WeaponRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(32, 28)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "×"
+
+[node name="ArmorRow" type="HBoxContainer" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ArmorIcon" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/ArmorRow"]
+custom_minimum_size = Vector2(28, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.35, 0.85, 0.65, 1)
+theme_override_font_sizes/font_size = 16
+text = "A"
+
+[node name="ArmorLabel" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/ArmorRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.93, 0.96, 1)
+theme_override_font_sizes/font_size = 13
+text_overrun_behavior = 3
+text = "—"
+
+[node name="UnequipArmorButton" type="Button" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/ArmorRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(32, 28)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "×"
+
+[node name="BagRow" type="HBoxContainer" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="BagIcon" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/BagRow"]
+custom_minimum_size = Vector2(28, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.35, 0.85, 0.65, 1)
+theme_override_font_sizes/font_size = 16
+text = "B"
+
+[node name="BagLabel" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/BagRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.93, 0.96, 1)
+theme_override_font_sizes/font_size = 13
+text_overrun_behavior = 3
+text = "—"
+
+[node name="UnequipBagButton" type="Button" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/BagRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(32, 28)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "×"
+
+[node name="KitMetaRow" type="HBoxContainer" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="ControlsHint" type="Label" parent="DeployPanel/DeployVBox"]
+[node name="RiskLabel" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/KitMetaRow"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.45, 0.55, 0.6, 1)
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.85, 0.7, 0.4, 1)
 theme_override_font_sizes/font_size = 11
-text = "W/S locker · E equip · X sell · F auto-kit · Enter deploy · Esc menu"
+text_overrun_behavior = 3
+text = ""
 
-[node name="DeployHint" type="Label" parent="DeployPanel/DeployVBox"]
+[node name="PackLabel" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/KitMetaRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.5, 0.62, 0.7, 1)
+theme_override_font_sizes/font_size = 11
+horizontal_alignment = 2
+text_overrun_behavior = 3
+text = ""
+
+[node name="StoresHeader" type="Label" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.8, 0.86, 1)
+theme_override_font_sizes/font_size = 12
+text = "STORES"
+
+[node name="StoresRow" type="HBoxContainer" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="BuyMedButton" type="Button" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/StoresRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 12
+text = "Med"
+
+[node name="BuyAmmoButton" type="Button" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/StoresRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 12
+text = "Ammo"
+
+[node name="BuyFlareButton" type="Button" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/StoresRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 12
+text = "Flare"
+
+[node name="PackScrapButton" type="Button" parent="Root/RootVBox/MainRow/RightCol/KitPanel/KitVBox/StoresRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 12
+text = "Scrap"
+
+[node name="SkillsPanel" type="PanelContainer" parent="Root/RootVBox/MainRow/RightCol"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="SkillsVBox" type="VBoxContainer" parent="Root/RootVBox/MainRow/RightCol/SkillsPanel"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="SkillsHeaderRow" type="HBoxContainer" parent="Root/RootVBox/MainRow/RightCol/SkillsPanel/SkillsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SkillsHeader" type="Label" parent="Root/RootVBox/MainRow/RightCol/SkillsPanel/SkillsVBox/SkillsHeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.7, 0.8, 0.86, 1)
+theme_override_font_sizes/font_size = 12
+text = "SKILLS"
+
+[node name="TrainButton" type="Button" parent="Root/RootVBox/MainRow/RightCol/SkillsPanel/SkillsVBox/SkillsHeaderRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(110, 28)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Train"
+
+[node name="SkillsPoints" type="Label" parent="Root/RootVBox/MainRow/RightCol/SkillsPanel/SkillsVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.7, 0.78, 1)
+theme_override_font_sizes/font_size = 11
+autowrap_mode = 2
+text = ""
+
+[node name="SkillsScroll" type="ScrollContainer" parent="Root/RootVBox/MainRow/RightCol/SkillsPanel/SkillsVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="SkillsList" type="VBoxContainer" parent="Root/RootVBox/MainRow/RightCol/SkillsPanel/SkillsVBox/SkillsScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="DeployPanel" type="PanelContainer" parent="Root/RootVBox/MainRow/RightCol"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="DeployVBox" type="VBoxContainer" parent="Root/RootVBox/MainRow/RightCol/DeployPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="DeployHint" type="Label" parent="Root/RootVBox/MainRow/RightCol/DeployPanel/DeployVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.72, 0.78, 1)
 theme_override_font_sizes/font_size = 12
+text_overrun_behavior = 3
 text = ""
 
-[node name="ReturnLabel" type="Label" parent="DeployPanel/DeployVBox"]
+[node name="StartRaidButton" type="Button" parent="Root/RootVBox/MainRow/RightCol/DeployPanel/DeployVBox"]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "DEPLOY"
+
+[node name="ControlsHint" type="Label" parent="Root/RootVBox/MainRow/RightCol/DeployPanel/DeployVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4, 0.5, 0.56, 1)
+theme_override_font_sizes/font_size = 11
+text_overrun_behavior = 3
+text = "W/S · E equip · X sell · F kit · Enter deploy"
+
+[node name="ReturnLabel" type="Label" parent="Root/RootVBox/MainRow/RightCol/DeployPanel/DeployVBox"]
+unique_name_in_owner = true
+visible = false
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.65, 0.72, 1)
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 text = ""
-
-[node name="StartRaidButton" type="Button" parent="DeployPanel/DeployVBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 64)
-layout_mode = 2
-theme_override_font_sizes/font_size = 20
-text = "DEPLOY"

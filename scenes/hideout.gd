@@ -85,10 +85,12 @@ func _build_skill_rows() -> void:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 6)
 		var name_l := Label.new()
-		name_l.custom_minimum_size = Vector2(88, 0)
+		name_l.custom_minimum_size = Vector2(72, 0)
+		name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_l.add_theme_font_size_override("font_size", 12)
 		name_l.add_theme_color_override("font_color", Color(0.88, 0.92, 0.96, 1))
 		name_l.text = Skills.label(skill_id)
+		name_l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		name_l.mouse_filter = Control.MOUSE_FILTER_STOP
 		name_l.gui_input.connect(func(ev: InputEvent) -> void:
 			if ev is InputEventMouseButton and ev.pressed:
@@ -96,7 +98,7 @@ func _build_skill_rows() -> void:
 				_refresh_skills()
 		)
 		var rank_l := Label.new()
-		rank_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rank_l.custom_minimum_size = Vector2(56, 0)
 		rank_l.add_theme_font_size_override("font_size", 12)
 		rank_l.add_theme_color_override("font_color", Color(0.55, 0.62, 0.7, 1))
 		rank_l.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -106,12 +108,12 @@ func _build_skill_rows() -> void:
 				_refresh_skills()
 		)
 		var down := Button.new()
-		down.custom_minimum_size = Vector2(32, 28)
+		down.custom_minimum_size = Vector2(28, 26)
 		down.text = "−"
 		down.pressed.connect(_on_lower_skill.bind(skill_id))
 		UiStyle.style_button(down, false)
 		var up := Button.new()
-		up.custom_minimum_size = Vector2(32, 28)
+		up.custom_minimum_size = Vector2(28, 26)
 		up.text = "+"
 		up.pressed.connect(_on_raise_skill.bind(skill_id))
 		UiStyle.style_button(up, false)
@@ -124,10 +126,10 @@ func _build_skill_rows() -> void:
 
 
 func _apply_styles() -> void:
-	UiStyle.apply_wash(locker_panel, Color(0.055, 0.075, 0.1, 0.72))
-	UiStyle.apply_wash(kit_panel, Color(0.055, 0.075, 0.1, 0.62))
-	UiStyle.apply_wash(skills_panel, Color(0.055, 0.08, 0.1, 0.66))
-	UiStyle.apply_wash(deploy_panel, Color(0.055, 0.08, 0.1, 0.68))
+	UiStyle.apply_wash(locker_panel, Color(0.05, 0.07, 0.095, 0.78))
+	UiStyle.apply_wash(kit_panel, Color(0.05, 0.07, 0.095, 0.7))
+	UiStyle.apply_wash(skills_panel, Color(0.05, 0.075, 0.095, 0.7))
+	UiStyle.apply_wash(deploy_panel, Color(0.06, 0.1, 0.09, 0.82))
 	UiStyle.style_button(start_button, true)
 	UiStyle.style_button(equip_button, false)
 	UiStyle.style_button(quick_kit_button, false)
@@ -146,7 +148,7 @@ func _apply_styles() -> void:
 	UiStyle.style_button(filter_loot_button, false)
 
 	var list_bg := StyleBoxFlat.new()
-	list_bg.bg_color = Color(0.035, 0.05, 0.07, 0.95)
+	list_bg.bg_color = Color(0.03, 0.042, 0.06, 0.98)
 	list_bg.set_border_width_all(0)
 	list_bg.set_corner_radius_all(4)
 	list_bg.content_margin_left = 8
@@ -154,11 +156,15 @@ func _apply_styles() -> void:
 	list_bg.content_margin_top = 6
 	list_bg.content_margin_bottom = 6
 	stash_list.add_theme_stylebox_override("panel", list_bg)
+	stash_list.add_theme_stylebox_override("focus", list_bg)
 	var sel := StyleBoxFlat.new()
 	sel.bg_color = Color(0.11, 0.2, 0.18, 1)
 	sel.set_corner_radius_all(3)
 	stash_list.add_theme_stylebox_override("selected", sel)
 	stash_list.add_theme_stylebox_override("selected_focus", sel)
+	stash_list.add_theme_color_override("font_color", Color(0.82, 0.88, 0.92, 1))
+	stash_list.add_theme_color_override("font_hovered_color", Color(0.94, 0.97, 0.99, 1))
+	stash_list.add_theme_color_override("font_selected_color", Color(0.92, 0.98, 0.94, 1))
 
 
 func _process(_dt: float) -> void:
@@ -295,7 +301,7 @@ func _on_salvage_pressed() -> void:
 	if not _salvage_armed:
 		_salvage_armed = true
 		salvage_button.text = "Confirm?"
-		GameSession.status = "Salvage sells all loot stacks — kit stays. Press again."
+		GameSession.status = "Salvage all loot? Press again to confirm."
 		_refresh()
 		return
 	_salvage_armed = false
@@ -411,11 +417,11 @@ func _refresh_skills() -> void:
 	if _selected_skill_id.is_empty() and not Skills.IDS.is_empty():
 		_selected_skill_id = String(Skills.IDS[0])
 	var blurb := Skills.blurb(_selected_skill_id)
-	skills_points.text = "%d point%s  ·  %s" % [pts, "" if pts == 1 else "s", blurb]
+	skills_points.text = "%d pt%s — %s" % [pts, "" if pts == 1 else "s", blurb]
 	var cost := MetaSim.SKILL_POINT_INFLUENCE_COST
 	var can_train := int(GameSession.meta["influence"]) >= cost
 	train_button.visible = can_train
-	train_button.text = "Train  %d inf" % cost
+	train_button.text = "Train %d" % cost
 	train_button.disabled = not can_train
 	for skill_id in Skills.IDS:
 		var row: Dictionary = _skill_rows[skill_id]
@@ -447,7 +453,7 @@ func _refresh() -> void:
 	Skills.ensure(meta)
 	var loadout: Dictionary = meta["loadout"]
 	title_label.text = "BASE"
-	stats_label.text = "%d cr   %d inf   locker %d   runs %d" % [
+	stats_label.text = "%d cr  ·  %d inf  ·  locker %d  ·  runs %d" % [
 		int(meta["credits"]),
 		int(meta["influence"]),
 		Items.loot_influence_value(meta["stash"]),
@@ -468,7 +474,7 @@ func _refresh() -> void:
 	history_label.visible = not hist.is_empty()
 	return_label.visible = false
 	return_label.text = ""
-	controls_hint.text = "W/S locker · E equip · X sell · F auto-kit · 1/2/3 filter · Tab focus · Enter deploy · Esc menu"
+	controls_hint.text = "W/S · E equip · X sell · F kit · 1/2/3 filter · Tab · Enter deploy"
 
 	weapon_label.text = Items.weapon_slot_name(loadout.get("weapon_id"))
 	armor_label.text = _slot_line(loadout.get("armor_id"))
@@ -481,7 +487,7 @@ func _refresh() -> void:
 			Items.item_name(armor_id),
 			int(round(float(adef.get("mitigation", 0.0)) * 100.0)),
 		]
-	risk_label.text = "At risk  %d cr  if you drop" % MetaSim.loadout_at_risk_value(loadout)
+	risk_label.text = "At risk %d cr" % MetaSim.loadout_at_risk_value(loadout)
 	unequip_weapon_button.disabled = loadout.get("weapon_id") == null or String(loadout.get("weapon_id")).is_empty()
 	unequip_armor_button.disabled = loadout.get("armor_id") == null or String(loadout.get("armor_id")).is_empty()
 	unequip_bag_button.disabled = loadout.get("bag_id") == null or String(loadout.get("bag_id")).is_empty()
@@ -490,31 +496,31 @@ func _refresh() -> void:
 	var meds := mini(2, Items.count_in_stacks(meta["stash"], "medkit"))
 	var scrap_pack := int(meta.get("pack_scrap_qty", 0))
 	var has_weapon := Items.loadout_has_weapon(loadout)
-	pack_label.text = "Bag %d   ·   Meds ×%d   ·   Scrap pack %d" % [bag_cap, meds, scrap_pack]
+	pack_label.text = "Bag %d  ·  Med ×%d  ·  Scrap %d" % [bag_cap, meds, scrap_pack]
 	pack_label.add_theme_color_override("font_color", Color(0.55, 0.66, 0.74, 1))
 
 	var credits := int(meta["credits"])
-	buy_med_button.text = "+ Med  %d cr" % MetaSim.buy_price("medkit")
-	buy_ammo_button.text = "+ Ammo  %d cr" % MetaSim.buy_price("ammo_box")
-	buy_flare_button.text = "+ Flare  %d cr" % MetaSim.buy_price("mark_flare")
+	buy_med_button.text = "Med %d" % MetaSim.buy_price("medkit")
+	buy_ammo_button.text = "Ammo %d" % MetaSim.buy_price("ammo_box")
+	buy_flare_button.text = "Flare %d" % MetaSim.buy_price("mark_flare")
 	buy_med_button.disabled = credits < MetaSim.buy_price("medkit")
 	buy_ammo_button.disabled = credits < MetaSim.buy_price("ammo_box")
 	buy_flare_button.disabled = credits < MetaSim.buy_price("mark_flare")
 	var scrap_have := Items.count_in_stacks(meta["stash"], "scrap")
 	pack_scrap_button.disabled = scrap_have <= 0 and scrap_pack <= 0
-	pack_scrap_button.text = "Scrap ×%d" % scrap_pack if scrap_pack > 0 else "Pack scrap"
+	pack_scrap_button.text = "Scrap ×%d" % scrap_pack if scrap_pack > 0 else "Scrap"
 
 	start_button.disabled = false
 	start_button.text = "DEPLOY"
 	if has_weapon:
-		deploy_hint.text = "Kit ready — guns optional next run if you strip the W slot."
+		deploy_hint.text = "Ready — strip W anytime to go fists."
 		deploy_hint.add_theme_color_override("font_color", Color(0.55, 0.7, 0.62, 1))
 	else:
-		deploy_hint.text = "Unarmed OK — fists only in the field (LMB punch)."
+		deploy_hint.text = "Unarmed — LMB punches in the field."
 		deploy_hint.add_theme_color_override("font_color", Color("e6b35a"))
 
 	if not _salvage_armed:
-		salvage_button.text = "Salvage loot"
+		salvage_button.text = "Salvage"
 
 	_refresh_filter_buttons()
 	_refresh_skills()

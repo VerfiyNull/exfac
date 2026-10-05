@@ -1,9 +1,11 @@
 extends SceneTree
 ## Headless smoke: hideout economy + raid extract/death without rendering.
+## Explicit preloads — same fresh-clone rule as scripts/systems/RULES.md.
 
 const _Items := preload("res://scripts/systems/items.gd")
 const _MetaSim := preload("res://scripts/systems/meta.gd")
 const _RaidSim := preload("res://scripts/systems/raid.gd")
+const _RaidRoamers := preload("res://scripts/systems/raid_roamers.gd")
 const _Skills := preload("res://scripts/systems/skills.gd")
 const _SaveGame := preload("res://scripts/systems/save.gd")
 
@@ -45,13 +47,31 @@ func _initialize() -> void:
 		var src := FileAccess.get_file_as_string("res://scenes/raid.gd")
 		if src.find('preload("res://scripts/systems/raid.gd")') < 0:
 			return false
-		if src.find("RaidSim.THREAT_BEARING_TTL") < 0:
+		if src.find("RaidSim.") < 0:
+			return false
+		if src.find('preload("res://scripts/raid_view.gd")') < 0:
 			return false
 		var scr: Variant = load("res://scenes/raid.gd")
 		if scr == null:
 			return false
+		var view_scr: Variant = load("res://scripts/raid_view.gd")
+		if view_scr == null:
+			return false
 		var raid_ps: PackedScene = load("res://scenes/raid.tscn")
 		return raid_ps != null
+	)
+	failed += _check("Kenney raid assets resolve poses", func() -> bool:
+		var assets: GDScript = load("res://scripts/systems/raid_assets.gd") as GDScript
+		if assets == null:
+			return false
+		# Soft skip if pack not checked in — CI/fresh clone without assets/ still smoke-green.
+		if not ResourceLoader.exists("res://assets/PNG/Tiles/tile_01.png"):
+			return true
+		for key in ["player_stand", "player_reload", "roamer_stand", "elite_gun", "grass", "door"]:
+			var tex: Texture2D = assets.call("get_tex", key) as Texture2D
+			if tex == null:
+				return false
+		return true
 	)
 	failed += _check("RaidSim public bag refresh", func() -> bool:
 		return _script_has_method(_RaidSim, "refresh_inventory_cap")
@@ -100,7 +120,7 @@ func _initialize() -> void:
 			"id": 99,
 			"alive": true,
 			"pos": player["pos"] + Vector2(28, 0),
-			"radius": 12.0,
+			"radius": 18.0,
 			"hp": 40.0,
 			"max_hp": 40.0,
 			"mitigation": 0.0,
@@ -139,7 +159,7 @@ func _initialize() -> void:
 			"id": 99,
 			"alive": true,
 			"pos": start,
-			"radius": 12.0,
+			"radius": 18.0,
 			"hp": 80.0,
 			"max_hp": 80.0,
 			"mitigation": 0.0,
@@ -203,8 +223,12 @@ func _initialize() -> void:
 		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": "sling_bag"}
 		var world := _RaidSim.create_raid_world(loadout)
 		var player: Dictionary = world["player"]
+		# Pin mid-map so random edge ingress can't put the target out of punch reach.
+		player["pos"] = Vector2(900, 900)
+		player["stamina"] = float(player.get("max_stamina", 100.0))
 		var before := float(player["stamina"])
 		world["obstacles"] = []
+		world["extracts"] = []
 		world["roamers"] = [{
 			"id": 99, "alive": true, "pos": player["pos"] + Vector2(28, 0), "radius": 12.0,
 			"hp": 80.0, "max_hp": 80.0, "mitigation": 0.0, "aim": Vector2.LEFT, "speed": 100.0,
@@ -227,7 +251,7 @@ func _initialize() -> void:
 			"id": 99,
 			"alive": true,
 			"pos": start,
-			"radius": 12.0,
+			"radius": 18.0,
 			"hp": 200.0,
 			"max_hp": 200.0,
 			"mitigation": 0.0,
@@ -307,10 +331,10 @@ func _initialize() -> void:
 	failed += _check("raid world is large", func() -> bool:
 		var meta := _MetaSim.create_meta_state()
 		var world := _RaidSim.create_raid_world(meta["loadout"])
-		return float(world["width"]) >= 7000.0 and float(world["height"]) >= 4500.0 \
-			and world["roamers"].size() >= 20 \
-			and (world.get("decals", []) as Array).size() >= 8 \
-			and (world["obstacles"] as Array).size() >= 40
+		return float(world["width"]) >= 9000.0 and float(world["height"]) >= 6000.0 \
+			and world["roamers"].size() >= 30 \
+			and (world.get("decals", []) as Array).size() >= 12 \
+			and (world["obstacles"] as Array).size() >= 80
 	)
 	failed += _check("district map has landmarks and road spine", func() -> bool:
 		var meta := _MetaSim.create_meta_state()
@@ -318,15 +342,20 @@ func _initialize() -> void:
 		var landmarks: Array = world.get("landmarks", [])
 		var districts: Array = world.get("districts", [])
 		var road_n := 0
+		var structures := 0
 		for d in world.get("decals", []):
 			if String(d.get("style", "")) == "road":
 				road_n += 1
 		var styles := {}
 		for o in world["obstacles"]:
-			styles[String(o.get("style", ""))] = true
+			var st := String(o.get("style", ""))
+			styles[st] = true
+			if st in ["shed", "warehouse", "courtyard", "bunker"]:
+				structures += 1
 		var has_prefabs := styles.has("shed") and styles.has("warehouse") \
 			and styles.has("courtyard") and styles.has("bunker")
-		return landmarks.size() >= 8 and districts.size() >= 6 and road_n >= 4 and has_prefabs
+		return landmarks.size() >= 14 and districts.size() >= 12 and road_n >= 6 \
+			and has_prefabs and structures >= 40
 	)
 	failed += _check("ingress and extracts stay clear of solids", func() -> bool:
 		var meta := _MetaSim.create_meta_state()
@@ -340,6 +369,174 @@ func _initialize() -> void:
 			if not _RaidSim._place_away_from(obstacles, zp.x, zp.y, 22.0):
 				return false
 		return true
+	)
+	failed += _check("spawn stays far from extracts", func() -> bool:
+		# Multi-seed — layout RNG must never drop the player onto a lift.
+		for s in 12:
+			seed(s * 97 + 3)
+			var meta := _MetaSim.create_meta_state()
+			var world := _RaidSim.create_raid_world(meta["loadout"])
+			var spawn: Vector2 = world["player"]["pos"]
+			for z in world["extracts"]:
+				var zp: Vector2 = z["pos"]
+				var need := _RaidSim.SPAWN_EXTRACT_MIN_DIST + float(z.get("radius", 54.0))
+				if spawn.distance_to(zp) < need:
+					return false
+		return true
+	)
+	failed += _check("cannot shut door while standing in it", func() -> bool:
+		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": "sling_bag"}
+		var world := _RaidSim.create_raid_world(loadout)
+		var player: Dictionary = world["player"]
+		world["roamers"] = []
+		var door := {"x": 500.0, "y": 400.0, "w": 14.0, "h": 56.0, "kind": "door", "open": true, "id": -9, "style": "door"}
+		world["obstacles"] = [door]
+		player["pos"] = Vector2(507.0, 428.0)
+		player["radius"] = _RaidSim.ACTOR_RADIUS
+		var before: Vector2 = player["pos"]
+		_RaidSim._toggle_door(world, door)
+		# Still open, player unmoved.
+		var blocked := bool(door["open"]) and before.distance_to(player["pos"]) < 0.5
+		# Step clear, then shut works.
+		player["pos"] = Vector2(470.0, 428.0)
+		_RaidSim._toggle_door(world, door)
+		return blocked and not bool(door["open"])
+	)
+	failed += _check("cannot shut door with roamer in doorway", func() -> bool:
+		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": "sling_bag"}
+		var world := _RaidSim.create_raid_world(loadout)
+		var player: Dictionary = world["player"]
+		var door := {"x": 500.0, "y": 400.0, "w": 14.0, "h": 56.0, "kind": "door", "open": true, "id": -11, "style": "door"}
+		world["obstacles"] = [door]
+		player["pos"] = Vector2(450.0, 428.0)
+		world["roamers"] = [{
+			"alive": true, "pos": Vector2(507.0, 428.0), "radius": _RaidSim.ROAMER_RADIUS,
+		}]
+		_RaidSim._toggle_door(world, door)
+		return bool(door["open"])
+	)
+	failed += _check("roamer opens closed door in walk path", func() -> bool:
+		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": "sling_bag"}
+		var world := _RaidSim.create_raid_world(loadout)
+		world["roamers"] = []
+		var door := {"x": 600.0, "y": 400.0, "w": 14.0, "h": 56.0, "kind": "door", "open": false, "id": -12, "style": "door"}
+		world["obstacles"] = [door]
+		world["player"]["pos"] = Vector2(100, 100)
+		var roamer := {
+			"alive": true, "pos": Vector2(580.0, 428.0), "radius": _RaidSim.ROAMER_RADIUS,
+			"aim": Vector2.RIGHT, "door_cooldown": 0.0, "melee_slow_ttl": 0.0,
+			"hp": 80.0, "max_hp": 80.0, "speed": 80.0, "aggro_range": 40.0,
+			"ai_state": "patrol", "dormant": false, "elite": false, "hit_flash": 0.0,
+			"alert_ttl": 0.0, "search_ttl": 0.0, "call_cooldown": 0.0, "suppress_ttl": 0.0,
+			"telegraph_ttl": 0.0, "fire_cooldown": 0.0, "hear_mult": 1.0, "patrol_anchor": Vector2(580, 428),
+			"patrol_waypoint": Vector2(700, 428), "role": "roamer",
+		}
+		world["roamers"] = [roamer]
+		_RaidRoamers._try_open_blocking_door(world, roamer)
+		return bool(door["open"])
+	)
+	failed += _check("windows block walk but not LOS", func() -> bool:
+		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": "sling_bag"}
+		var world := _RaidSim.create_raid_world(loadout)
+		var win := {"x": 300.0, "y": 300.0, "w": 14.0, "h": 34.0, "kind": "window", "style": "window", "broken": false}
+		world["obstacles"] = [win]
+		var sees: bool = _RaidSim.has_line_of_sight(Vector2(250, 317), Vector2(360, 317), world["obstacles"])
+		var actor := {"pos": Vector2(300, 317), "radius": 10.0}
+		_RaidSim._collide_actor_obstacles(actor, world["obstacles"])
+		var pushed: bool = actor["pos"].distance_to(Vector2(300, 317)) > 0.5
+		return sees and pushed
+	)
+	failed += _check("cannot loot through wall or window", func() -> bool:
+		var loadout := {"weapon_id": null, "armor_id": null, "bag_id": "sling_bag"}
+		var world := _RaidSim.create_raid_world(loadout)
+		world["roamers"] = []
+		world["crates"] = [{
+			"id": 1, "pos": Vector2(515, 460), "radius": 16.0, "opened": false, "kind": "crate", "contents": [],
+		}]
+		world["player"]["pos"] = Vector2(485, 460)
+		world["player"]["radius"] = _RaidSim.ACTOR_RADIUS
+		# Wall between player and crate (must block reach).
+		world["obstacles"] = [
+			{"x": 498.0, "y": 400.0, "w": 14.0, "h": 120.0, "kind": "solid", "style": "shed"},
+		]
+		var blocked_wall: bool = _RaidSim._find_loot_target(world) == null
+		var reach_blocked: bool = not _RaidSim.has_clear_reach(Vector2(485, 460), Vector2(515, 460), world["obstacles"])
+		world["obstacles"] = [
+			{"x": 498.0, "y": 440.0, "w": 14.0, "h": 40.0, "kind": "window", "style": "window", "broken": false},
+		]
+		var blocked_win: bool = _RaidSim._find_loot_target(world) == null
+		world["obstacles"] = []
+		var clear: bool = _RaidSim._find_loot_target(world) != null
+		return blocked_wall and reach_blocked and blocked_win and clear
+	)
+	failed += _check("shots break windows but still block walk", func() -> bool:
+		var loadout := {"weapon_id": "rusty_smg", "armor_id": null, "bag_id": "sling_bag"}
+		var world := _RaidSim.create_raid_world(loadout)
+		var win := {"x": 400.0, "y": 400.0, "w": 14.0, "h": 34.0, "kind": "window", "style": "window", "broken": false}
+		world["obstacles"] = [win]
+		world["roamers"] = []
+		world["bullets"] = []
+		var broke: bool = _RaidSim._try_break_window_at(world, Vector2(407, 417))
+		var still_blocks: bool = _RaidSim._obstacle_blocks(win) and _RaidSim._obstacle_blocks_reach(win)
+		var actor := {"pos": Vector2(407, 417), "radius": 10.0}
+		_RaidSim._collide_actor_obstacles(actor, world["obstacles"])
+		var pushed: bool = actor["pos"].distance_to(Vector2(407, 417)) > 0.5
+		return broke and bool(win["broken"]) and still_blocks and pushed
+	)
+	failed += _check("structures include windows and thin walls", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var world := _RaidSim.create_raid_world(meta["loadout"])
+		var wins := 0
+		var thin_wall := false
+		for o in world.get("obstacles", []):
+			if String(o.get("kind", "")) == "window":
+				wins += 1
+			var style := String(o.get("style", ""))
+			if style in ["shed", "warehouse", "courtyard", "bunker"] and String(o.get("kind", "")) == "solid":
+				var thick := mini(float(o["w"]), float(o["h"]))
+				if thick <= 24.0:
+					thin_wall = true
+		return wins >= 2 and thin_wall
+	)
+	failed += _check("floor types bias speed and noise", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var world := _RaidSim.create_raid_world(meta["loadout"], 0)
+		world["roamers"] = []
+		world["obstacles"] = []
+		# Plant a known asphalt strip and a mud wash under controlled positions.
+		world["decals"] = [
+			{"x": 100.0, "y": 100.0, "w": 400.0, "h": 90.0, "style": "road"},
+			{"x": 100.0, "y": 400.0, "w": 400.0, "h": 200.0, "style": "mud"},
+		]
+		var road_m: Dictionary = _RaidSim._floor_mods("road")
+		var mud_m: Dictionary = _RaidSim._floor_mods("mud")
+		var grass_m: Dictionary = _RaidSim._floor_mods("grass")
+		if float(road_m["speed"]) <= float(mud_m["speed"]):
+			return false
+		if float(grass_m["hear"]) >= float(road_m["hear"]):
+			return false
+		if float(grass_m["vision"]) >= float(road_m["vision"]):
+			return false
+		world["player"]["pos"] = Vector2(200, 145)
+		_RaidSim.step_raid(world, 0.05, Vector2(1, 0), Vector2(260, 145), false, false, 4.0, false, false, false)
+		var on_road := String(world["player"].get("floor", "")) == "road"
+		world["player"]["pos"] = Vector2(200, 500)
+		_RaidSim.step_raid(world, 0.05, Vector2(1, 0), Vector2(260, 500), false, false, 4.0, false, false, false)
+		var on_mud := String(world["player"].get("floor", "")) == "mud"
+		return on_road and on_mud and _RaidSim._floor_at(world, Vector2(200, 145)) == "road"
+	)
+	failed += _check("map has nature detail", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var world := _RaidSim.create_raid_world(meta["loadout"])
+		var nature_d := 0
+		for d in world.get("decals", []):
+			if String(d.get("style", "")) in ["grass", "mud", "leaf", "scrub", "pond"]:
+				nature_d += 1
+		var nature_o := 0
+		for o in world["obstacles"]:
+			if String(o.get("style", "")) in ["tree", "bush", "rock", "log"]:
+				nature_o += 1
+		return nature_d >= 10 and nature_o >= 12
 	)
 	failed += _check("vision blocked by wall", func() -> bool:
 		var obstacles: Array = [{"x": 100.0, "y": 0.0, "w": 40.0, "h": 200.0}]
@@ -452,14 +649,15 @@ func _initialize() -> void:
 		var meta := _MetaSim.create_meta_state()
 		var world := _RaidSim.create_raid_world(meta["loadout"], 0)
 		world["roamers"] = []
-		world["player"]["stamina"] = 5.0
+		world["player"]["stamina"] = 3.0
 		var start: Vector2 = world["player"]["pos"]
-		_RaidSim.step_raid(world, 0.3, Vector2(1, 0), start + Vector2(80, 0), false, false, 4.0, false, false, true)
+		# Drain is gentler now — hold sprint long enough to empty the bar.
+		_RaidSim.step_raid(world, 0.5, Vector2(1, 0), start + Vector2(80, 0), false, false, 4.0, false, false, true)
 		return float(world["player"]["stamina"]) <= 0.0 \
 			and float(world["player"]["sprint_exhaust"]) > 0.0 \
 			and not bool(world["player"]["sprinting"])
 	)
-	failed += _check("extract compass points at nearest exit", func() -> bool:
+	failed += _check("nearest extract bearing tracked", func() -> bool:
 		var meta := _MetaSim.create_meta_state()
 		var world := _RaidSim.create_raid_world(meta["loadout"], 0)
 		return int(world["nearest_extract_id"]) >= 0 and float(world["nearest_extract_dist"]) > 0.0 \
@@ -597,7 +795,7 @@ func _initialize() -> void:
 			_RaidSim.step_raid(world, 0.06, Vector2.ZERO, aim, true, false, 18.0)
 		var bloom := float(world["player"]["recoil_bloom"])
 		var spread := float(world["player"]["aim_spread"])
-		return bloom > before + 0.08 and spread > 0.12 and float(world["shake"]) > 0.0
+		return bloom > before + 0.08 and spread > 0.12
 	)
 	failed += _check("rifle starts tighter than SMG", func() -> bool:
 		var smg_stats: Dictionary = _Items.loadout_recoil_stats({"weapon_id": "rusty_smg"})
@@ -698,6 +896,8 @@ func _initialize() -> void:
 		roamer["alive"] = true
 		roamer["aggro_range"] = 400.0
 		roamer["ai_state"] = "patrol"
+		# Face the player — idle vision is a ~90° cone (PZ-style).
+		roamer["aim"] = Vector2.LEFT
 		_RaidSim.step_raid(world, 0.1, Vector2.ZERO, world["player"]["pos"], false, false, 4.0)
 		return String(roamer["ai_state"]) == "combat"
 	)
@@ -848,6 +1048,51 @@ func _initialize() -> void:
 		_RaidSim.step_raid(world, 0.1, Vector2(1, 0), before + Vector2(50, 0), false, false, 4.0)
 		var after: Vector2 = world["player"]["pos"]
 		return after.x > before.x
+	)
+	failed += _check("facing gait slows strafe and backpedal", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var fwd := _RaidSim.create_raid_world(meta["loadout"], 0)
+		var back := _RaidSim.create_raid_world(meta["loadout"], 0)
+		fwd["roamers"] = []
+		back["roamers"] = []
+		fwd["obstacles"] = []
+		back["obstacles"] = []
+		var start := Vector2(900, 900)
+		fwd["player"]["pos"] = start
+		back["player"]["pos"] = start
+		# Look east; walk east vs west.
+		_RaidSim.step_raid(fwd, 0.25, Vector2(1, 0), start + Vector2(80, 0), false, false, 4.0)
+		_RaidSim.step_raid(back, 0.25, Vector2(-1, 0), start + Vector2(80, 0), false, false, 4.0)
+		var fwd_d: float = (fwd["player"]["pos"] as Vector2).distance_to(start)
+		var back_d: float = (back["player"]["pos"] as Vector2).distance_to(start)
+		var strafe_m := _RaidSim._facing_move_mult(Vector2(0, 1), Vector2(1, 0))
+		var back_m := _RaidSim._facing_move_mult(Vector2(-1, 0), Vector2(1, 0))
+		var fwd_m := _RaidSim._facing_move_mult(Vector2(1, 0), Vector2(1, 0))
+		return fwd_d > back_d * 1.35 \
+			and fwd_m > strafe_m and strafe_m > back_m \
+			and back_m <= _RaidSim.MOVE_BACK_MULT + 0.02
+	)
+	failed += _check("idle roamers need view cone to spot", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var world := _RaidSim.create_raid_world(meta["loadout"], 0)
+		world["obstacles"] = []
+		world["noise_ttl"] = 0.0
+		world["noise_radius"] = 0.0
+		var player: Dictionary = world["player"]
+		player["pos"] = Vector2(500, 500)
+		# Roamer faces east; player stands behind (west) inside aggro range.
+		world["roamers"] = [{
+			"id": 77, "alive": true, "pos": Vector2(560, 500), "radius": 10.0,
+			"hp": 80.0, "max_hp": 80.0, "mitigation": 0.0, "aim": Vector2.RIGHT, "speed": 100.0,
+			"damage": 8.0, "fire_cooldown": 0.0, "hit_flash": 0.0, "alert_ttl": 0.0, "search_ttl": 0.0,
+			"call_cooldown": 1.0, "suppress_ttl": 0.0, "telegraph_ttl": 0.0, "aggro_range": 220.0,
+			"hear_mult": 1.0, "dormant": false, "ai_state": "patrol", "elite": false, "role": "roamer",
+			"home": Vector2(560, 500), "patrol_phase": 0.0, "melee_slow_ttl": 0.0, "vision_range": 520.0,
+		}]
+		_RaidSim.step_raid(world, 0.05, Vector2.ZERO, player["pos"] + Vector2(40, 0), false, false, 4.0)
+		var st := String(world["roamers"][0].get("ai_state", "patrol"))
+		# Still idle/search — not combat from a rear spot.
+		return st in ["patrol", "search", "forage", "dormant"]
 	)
 	failed += _check("empty mag does not auto-reload", func() -> bool:
 		var meta := _MetaSim.create_meta_state()

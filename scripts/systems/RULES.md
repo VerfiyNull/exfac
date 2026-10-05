@@ -7,14 +7,19 @@
 | `items.gd` | Catalog, stacks, loot rolls |
 | `meta.gd` | Credits, locker, loadout, requisition |
 | `skills.gd` | Skill ranks and raid modifiers |
-| `raid.gd` | Pure field sim hub (no nodes) |
-| `raid_roamers.gd` | Roamer / enforcer AI states |
+| `raid.gd` | Pure field sim hub (no nodes) — tunables + sections bannered in-file |
+| `raid_roamers.gd` | Roamer / enforcer AI states (host-bridges back into `raid.gd`) |
+| `raid_assets.gd` | Kenney tile/character path map (renderer-only; not sim) |
 | `save.gd` | Local JSON persistence |
 | `ui_style.gd` | Quiet washes / button chrome |
+
+Presentation: `scripts/raid_view.gd` (scene-owned Node2D) reads sim state; never mutate world from the view.
 
 Scenes and `GameSession` call these; they do not own UI nodes.
 
 Cross-system calls use **explicit `preload()`** at the top of the caller (same pattern as `scenes/raid.gd`). Do not rely on global `class_name` alone — headless smoke on a fresh clone has no `.godot` class cache.
+
+`raid_roamers.gd` mirrors a few `RaidSim` tunables (`EXTRACT_ALARM_RADIUS`, etc.) so AI stays typed without host lookups — **keep those values identical**.
 
 ## Rules
 

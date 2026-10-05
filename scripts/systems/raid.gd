@@ -1,6 +1,12 @@
 class_name RaidSim
 extends RefCounted
 ## Pure field simulation — visuals read this state; no Godot nodes owned here.
+##
+## Layout (search the section banners below):
+##   Tunables → World bootstrap → Perception/LOS → Main tick → Combat → Vitals →
+##   Noise → Inventory/medkit → Interact/loot → Gadgets → Melee → Raid resolve →
+##   Map gen → Spatial index → Floor/collision → Projectiles/extracts/bleed
+## Roamer brains live in raid_roamers.gd (host bridge back into helpers here).
 
 # Explicit preloads — headless / fresh clone has no global class_name cache yet.
 const Items := preload("res://scripts/systems/items.gd")
@@ -8,20 +14,55 @@ const Skills := preload("res://scripts/systems/skills.gd")
 const MetaSim := preload("res://scripts/systems/meta.gd")
 const RaidRoamers := preload("res://scripts/systems/raid_roamers.gd")
 
-const MAP_W := 7200.0
-const MAP_H := 4800.0
-const VISION_RANGE := 440.0
+# =============================================================================
+# TUNABLES — edit here; avoid scattering magic numbers in hot paths.
+# Mirrored copies in raid_roamers.gd must stay identical (see comment there).
+# =============================================================================
+
+# --- Map / perception --------------------------------------------------------
+const MAP_W := 9600.0
+const MAP_H := 6400.0
+## Visual forest skirt past the playable rect — hides the hard map cutoff.
+const MAP_MARGIN := 360.0
+## Spatial bins for draw / floor / LOS — keeps the big map from scanning everything.
+const SPATIAL_CHUNK := 512.0
+const VISION_RANGE := 520.0
+## PZ-style sight: ~90° cone (±45°) while idle; alerted AI tracks freely.
+const VIEW_CONE_HALF := PI * 0.25
+const VIEW_CONE_DOT := 0.7071  # cos(45°)
+const SPAWN_EXTRACT_MIN_DIST := 1100.0
+const ACTOR_RADIUS := 11.0
+const ROAMER_RADIUS := 10.0
+
+# --- Extract pressure --------------------------------------------------------
 ## How far roamers hear an active extract flare and rush the exit.
-const EXTRACT_ALARM_RADIUS := 1400.0
+const EXTRACT_ALARM_RADIUS := 1600.0
 ## Damage while holding extract bleeds progress (seconds lost per HP).
 const EXTRACT_DAMAGE_PROGRESS_BLEED := 0.045
-## Field medkit channel time — interrupted if you take damage.
-const MEDKIT_CHANNEL := 1.35
+## Crouched extract hold — keep the flare tight so the pad doesn't scream the whole map.
+const CROUCH_EXTRACT_ALARM_MULT := 0.62
+## Extract reinforcements — flare summons a late wave from the perimeter.
+const REINFORCE_DELAY_HOT := 0.55
+const REINFORCE_DELAY_CONTESTED := 1.15
+const REINFORCE_COUNT_HOT := 4
+const REINFORCE_COUNT_CONTESTED := 2
+const REINFORCE_SPAWN_RING := 380.0
+## Extract abandon — peeling off a lit pad still rings; don't cheese hold/leave.
+const HEAR_EXTRACT_ABANDON_RANGE := 520.0
+const NOISE_TTL_EXTRACT_ABANDON := 1.1
+const EXTRACT_ABANDON_MIN_PROGRESS := 0.12
+const EXTRACT_ABANDON_STAMINA := 18.0
+const EXTRACT_ABANDON_STUMBLE := 0.35
+const WOUNDED_EXTRACT_ABANDON_HEAR_MULT := 1.18
+const HEAVY_BAG_EXTRACT_ABANDON_HEAR_MULT := 1.14
+
+# --- Movement / stamina ------------------------------------------------------
 ## Sprint — big map traversal without making walk feel sluggish.
 const SPRINT_MULT := 1.7
 const STAMINA_MAX := 100.0
-const STAMINA_DRAIN := 26.0
-const STAMINA_REGEN := 16.0
+## Sprint sips the bar; recovery is deliberately slow so pacing still matters.
+const STAMINA_DRAIN := 14.0
+const STAMINA_REGEN := 8.0
 ## Brief lockout after emptying the bar so sprint can't stutter-tap.
 const SPRINT_EXHAUST := 0.75
 ## Movement response — accel toward desired speed; stop/reverse snappier than a skate.
@@ -30,6 +71,9 @@ const MOVE_STOP_RESP := 22.0
 const MOVE_REVERSE_RESP := 14.0
 const MOVE_SPRINT_RESP := 12.0
 const MOVE_BRACE_RESP := 20.0
+## Facing gait (PZ combat-strafe feel) — full pace looking ahead, slow when not.
+const MOVE_STRAFE_MULT := 0.72
+const MOVE_BACK_MULT := 0.52
 ## Aim turn — mouse lead feels planted, not rubbery; still tracks fast in a fight.
 const AIM_TURN_RESP := 20.0
 const AIM_TURN_BRACE_RESP := 14.0
@@ -42,10 +86,10 @@ const NOISE_TTL_STUMBLE := 0.5
 ## Soft land — drop into crouch during the plant to cut the tell and recover faster.
 const HEAR_STUMBLE_CROUCH_RANGE := 95.0
 const STUMBLE_CROUCH_DECAY := 2.2
-## Wounded stumble — limp collapse hits harder on the ears when upright.
 const WOUNDED_STUMBLE_HEAR_MULT := 1.22
-## Heavy stumble — a stuffed pack rattles harder when you plant upright.
 const HEAVY_BAG_STUMBLE_HEAR_MULT := 1.18
+
+# --- Stance (crouch / brace) -------------------------------------------------
 ## Crouch — slow, tight cone, quieter muzzle; can't sprint while down.
 const CROUCH_MULT := 0.58
 const CROUCH_SPREAD_MULT := 0.62
@@ -57,13 +101,16 @@ const BRACE_CROUCH_SPEED := 0.42
 ## Planted muzzle — bracing cups the report; stacks with crouch hush.
 const BRACE_SHOT_HEAR_MULT := 0.82
 const BRACE_CROUCH_SHOT_HEAR_MULT := 0.58
-## Wounded muzzle — shaking upright shots telegraph farther.
-const WOUNDED_SHOT_HEAR_MULT := 1.18
-## Heavy muzzle — a stuffed pack rattles upright shots farther.
-const HEAVY_BAG_SHOT_HEAR_MULT := 1.14
 ## Brace settle — hold the plant and the cone tightens further.
 const BRACE_SETTLE_TIME := 0.85
 const BRACE_SETTLE_SPREAD := 0.7
+const BRACE_RELOAD_MULT := 0.78
+const BRACE_CROUCH_RELOAD_MULT := 0.68
+const BRACE_HEAL_MULT := 0.82
+const CROUCH_HEAL_MULT := 0.88
+const BRACE_CROUCH_HEAL_MULT := 0.72
+
+# --- Suppression / threat ----------------------------------------------------
 ## Suppression — enemy rounds near you kick the aim cone open.
 const SUPPRESS_NEAR := 52.0
 const SUPPRESS_BLOOM := 0.038
@@ -76,6 +123,8 @@ const ROAMER_SUPPRESS_TTL := 0.7
 const ROAMER_SUPPRESS_SPREAD := 0.14
 ## Threat bearing — incoming fire paints a short compass tick.
 const THREAT_BEARING_TTL := 2.8
+
+# --- Dusk --------------------------------------------------------------------
 ## Field dusk — light falls; vision thins so you push for the lift.
 const RAID_DUSK_START := 120.0
 const RAID_DUSK_FULL := 240.0
@@ -85,8 +134,8 @@ const DUSK_HEAR_MAX := 1.22
 const DUSK_QUIET_ALARM_MULT := 1.9
 const DUSK_CONTESTED_ALARM_MULT := 1.22
 const DUSK_QUIET_PAD_ADD := 0.09
-## Crouched extract hold — keep the flare tight so the pad doesn't scream the whole map.
-const CROUCH_EXTRACT_ALARM_MULT := 0.62
+
+# --- Wound / adrenaline / bag weight -----------------------------------------
 ## Wounded limp — critical HP slows you (pressure to medkit / extract).
 const WOUNDED_HP_RATIO := 0.35
 const WOUNDED_SPEED_MULT := 0.72
@@ -107,39 +156,42 @@ const NOISE_TTL_WOUND_BREATH := 0.45
 const ADRENALINE_STAMINA := 38.0
 const ADRENALINE_SPEED := 1.12
 const ADRENALINE_TTL := 3.6
-## Limp lungs — sprinting while critical burns the bar faster.
 const WOUNDED_STAMINA_DRAIN_MULT := 1.35
-## Limp recovery — critical HP also slows stamina regen.
 const WOUNDED_STAMINA_REGEN_MULT := 0.72
-## Heavy lungs — a stuffed pack also burns sprint gas.
-const HEAVY_BAG_STAMINA_DRAIN_MULT := 1.22
-## Heavy recovery — a stuffed pack also slows stamina regen.
-const HEAVY_BAG_STAMINA_REGEN_MULT := 0.82
-## Heavy sprint — a stuffed pack also telegraphs a run farther.
-const HEAVY_BAG_SPRINT_HEAR_MULT := 1.2
-## Wounded sprint — limp footfalls telegraph a run farther.
 const WOUNDED_SPRINT_HEAR_MULT := 1.16
+const WOUNDED_SHOT_HEAR_MULT := 1.18
+const WOUNDED_SETTLE_MULT := 0.72
+const WOUNDED_HEAL_MULT := 0.78
+const WOUNDED_RELOAD_MULT := 0.78
+const ADRENALINE_SETTLE_MULT := 0.92
 ## Heavy bag — a stuffed pack drags you; risk of greed.
 const HEAVY_BAG_RATIO := 0.75
 const HEAVY_BAG_SPEED := 0.88
 const FULL_BAG_SPEED := 0.76
-## Heavy plant — a stuffed pack also slows brace settle.
+const HEAVY_BAG_STAMINA_DRAIN_MULT := 1.22
+const HEAVY_BAG_STAMINA_REGEN_MULT := 0.82
+const HEAVY_BAG_SPRINT_HEAR_MULT := 1.2
+const HEAVY_BAG_SHOT_HEAR_MULT := 1.14
 const HEAVY_BAG_SETTLE_MULT := 0.62
-## Shaking plant — limp HP also slows brace settle (adrenaline steadies).
-const WOUNDED_SETTLE_MULT := 0.72
-const ADRENALINE_SETTLE_MULT := 0.92
-## Heavy hands — stuffing the pack also slows mag changes.
 const HEAVY_BAG_RELOAD_MULT := 0.82
-## Heavy patch — fumbling a kit around a stuffed pack takes longer.
 const HEAVY_BAG_HEAL_MULT := 0.85
-## Shaking hands — limp HP also slows the medkit channel.
-const WOUNDED_HEAL_MULT := 0.78
-const WOUNDED_RELOAD_MULT := 0.78
+
+# --- Hearing (shots / sprint / walk) -----------------------------------------
 ## Roamers hear shots / sprint even without line of sight.
 const HEAR_SHOT_RANGE := 560.0
 const HEAR_SPRINT_RANGE := 240.0
 const NOISE_TTL_SHOT := 1.1
 const NOISE_TTL_SPRINT := 0.25
+## Footsteps — walk is audible; crouch stays quiet; sprint already has its own noise.
+const HEAR_WALK_RANGE := 110.0
+const NOISE_TTL_WALK := 0.35
+const HEAVY_BAG_WALK_HEAR_MULT := 1.35
+const FULL_BAG_WALK_HEAR_MULT := 1.55
+const WOUNDED_WALK_HEAR_MULT := 1.28
+
+# --- Loot / medkit channels --------------------------------------------------
+## Field medkit channel time — interrupted if you take damage.
+const MEDKIT_CHANNEL := 1.35
 ## Ransack — pry a crate / strip a body (not instant; loud; leave range or take a hit to cancel).
 const LOOT_CHANNEL_CRATE := 1.75
 const LOOT_CHANNEL_CORPSE := 1.15
@@ -151,6 +203,20 @@ const LOOT_CHANNEL_INTEL := 2.1
 ## Loose ground piles — quick grab so the field feels littered, not only boxed.
 const LOOT_CHANNEL_GROUND := 0.85
 const HEAR_RANSACK_RANGE := 400.0
+const CROUCH_LOOT_RATE := 1.28
+const CROUCH_RANSACK_HEAR_MULT := 0.62
+const HEAVY_BAG_RANSACK_HEAR_MULT := 1.22
+const HEAVY_BAG_LOOT_RATE := 0.82
+const WOUNDED_LOOT_RATE := 0.82
+## Sprint dump — aborting a channel into a run makes a clatter.
+const HEAR_RELOAD_DUMP_RANGE := 140.0
+const NOISE_TTL_RELOAD_DUMP := 0.4
+const HEAR_MEDKIT_DUMP_RANGE := 120.0
+const NOISE_TTL_MEDKIT_DUMP := 0.4
+const HEAR_LOOT_DUMP_RANGE := 160.0
+const NOISE_TTL_LOOT_DUMP := 0.45
+
+# --- Distraction / intel / flare ---------------------------------------------
 ## Scrap toss — throw junk ahead to pull roamers off you.
 const HEAR_DISTRACT_RANGE := 540.0
 const NOISE_TTL_DISTRACT := 2.2
@@ -163,126 +229,8 @@ const CROUCH_DISTRACT_HEAR_MULT := 0.72
 const CROUCH_DISTRACT_TTL_MULT := 1.35
 const BRACE_DISTRACT_TTL_MULT := 1.15
 const BRACE_CROUCH_DISTRACT_TTL_MULT := 1.5
-## Wounded toss — shaking upright scrap clangs farther.
 const WOUNDED_DISTRACT_HEAR_MULT := 1.2
-## Heavy toss — a stuffed pack rattles upright scrap farther.
 const HEAVY_BAG_DISTRACT_HEAR_MULT := 1.15
-## Extract reinforcements — flare summons a late wave from the perimeter.
-const REINFORCE_DELAY_HOT := 0.55
-const REINFORCE_DELAY_CONTESTED := 1.15
-const REINFORCE_COUNT_HOT := 4
-const REINFORCE_COUNT_CONTESTED := 2
-const REINFORCE_SPAWN_RING := 380.0
-## Blood trail — wounded runners drip scent roamers can track.
-const BLOOD_DRIP_INTERVAL := 0.45
-const BLOOD_TRAIL_TTL := 4.5
-## Doors — closed slabs block LOS/path; E pries them open (and shut).
-const DOOR_INTERACT_RANGE := 28.0
-const HEAR_DOOR_PRY_RANGE := 180.0
-const NOISE_TTL_DOOR_PRY := 0.55
-## Crouched pry — soft latch work so you can slip rooms without a stadium clang.
-const HEAR_DOOR_CROUCH_RANGE := 85.0
-const NOISE_TTL_DOOR_CROUCH := 0.4
-## Wounded pry — shaking hands clang the latch harder when upright.
-const WOUNDED_DOOR_PRY_HEAR_MULT := 1.25
-## Heavy pry — a stuffed pack rattles the latch when you stand-pry.
-const HEAVY_BAG_DOOR_PRY_HEAR_MULT := 1.18
-## Footsteps — walk is audible; crouch stays quiet; sprint already has its own noise.
-const HEAR_WALK_RANGE := 110.0
-const NOISE_TTL_WALK := 0.35
-## Heavy pack footfalls — a stuffed bag clanks louder when you walk it.
-const HEAVY_BAG_WALK_HEAR_MULT := 1.35
-const FULL_BAG_WALK_HEAR_MULT := 1.55
-## Wounded walk — limp footfalls telegraph when you're upright.
-const WOUNDED_WALK_HEAR_MULT := 1.28
-## Planted reload — bracing (optionally crouched) speeds the mag change.
-const BRACE_RELOAD_MULT := 0.78
-const BRACE_CROUCH_RELOAD_MULT := 0.68
-## Crouched ransack — faster pry, quieter clatter.
-const CROUCH_LOOT_RATE := 1.28
-const CROUCH_RANSACK_HEAR_MULT := 0.62
-## Heavy ransack — a stuffed pack rattles louder while you pry.
-const HEAVY_BAG_RANSACK_HEAR_MULT := 1.22
-## Heavy pry — greed also slows how fast you crack the lid.
-const HEAVY_BAG_LOOT_RATE := 0.82
-## Shaking hands — limp HP slows crate pry the same way.
-const WOUNDED_LOOT_RATE := 0.82
-## Planted medkit — brace/crouch lets you patch faster while vulnerable.
-const BRACE_HEAL_MULT := 0.82
-const CROUCH_HEAL_MULT := 0.88
-const BRACE_CROUCH_HEAL_MULT := 0.72
-## Dry-fire click — empty mag still makes a small tell.
-const HEAR_DRYFIRE_RANGE := 95.0
-const NOISE_TTL_DRYFIRE := 0.45
-## Crouched dry-fire — cup the click so it doesn't paint the hallway.
-const CROUCH_DRYFIRE_HEAR_MULT := 0.55
-## Braced dry-fire — planted click is softer than a hip snap.
-const BRACE_DRYFIRE_HEAR_MULT := 0.7
-const BRACE_CROUCH_DRYFIRE_HEAR_MULT := 0.42
-## Wounded dry-fire — shaking hands slap the receiver louder when upright.
-const WOUNDED_DRYFIRE_HEAR_MULT := 1.3
-## Heavy dry-fire — a stuffed pack rattles the empty slap when upright.
-const HEAVY_BAG_DRYFIRE_HEAR_MULT := 1.18
-## Sprint dump — canceling a reload into a run drops the mag with a clatter.
-const HEAR_RELOAD_DUMP_RANGE := 140.0
-const NOISE_TTL_RELOAD_DUMP := 0.4
-## Sprint dump medkit — same abort into a run; soft pack drop.
-const HEAR_MEDKIT_DUMP_RANGE := 120.0
-const NOISE_TTL_MEDKIT_DUMP := 0.4
-## Sprint dump ransack — kick off a crate mid-pry; louder clatter.
-const HEAR_LOOT_DUMP_RANGE := 160.0
-const NOISE_TTL_LOOT_DUMP := 0.45
-## Empty-mag shove — last-ditch contact weapon when the chamber's dry.
-const MELEE_RANGE := 34.0
-const MELEE_DAMAGE := 22.0
-## Contact hit — no knockback; briefly hobble their move speed instead.
-const MELEE_SLOW_TTL := 0.5
-const MELEE_SLOW_MULT := 0.4
-const MELEE_COOLDOWN := 0.9
-const HEAR_MELEE_RANGE := 200.0
-const NOISE_TTL_MELEE := 0.55
-## Unarmed punch — no gun visible; LMB is fists with shorter reach and quieter tell.
-const PUNCH_RANGE := 38.0
-const PUNCH_DAMAGE := 16.0
-const PUNCH_COOLDOWN := 0.52
-const PUNCH_STAMINA_COST := 14.0
-const MELEE_STAMINA_COST := 18.0
-const PUNCH_MISS_STAMINA_COST := 8.0
-const HEAR_PUNCH_RANGE := 110.0
-const NOISE_TTL_PUNCH := 0.35
-const PUNCH_SWING_TTL := 0.18
-## Wounded shove — limp upright buttstock rings farther.
-const WOUNDED_MELEE_HEAR_MULT := 1.2
-## Heavy shove — a stuffed pack rattles an upright buttstock farther.
-const HEAVY_BAG_MELEE_HEAR_MULT := 1.15
-## Silent rear drop — crouched empty-mag shove / punch into a dormant's back stays quiet.
-const MELEE_SILENT_DAMAGE := 58.0
-const PUNCH_SILENT_DAMAGE := 48.0
-const HEAR_MELEE_SILENT_RANGE := 55.0
-const NOISE_TTL_MELEE_SILENT := 0.35
-const MELEE_BEHIND_DOT := -0.35
-## Door bash — sprinting into a closed slab kicks it open loudly.
-const HEAR_DOOR_BASH_RANGE := 320.0
-const NOISE_TTL_DOOR_BASH := 0.7
-const DOOR_BASH_STAMINA := 28.0
-## Wounded bash — limp kick rings farther across the compound.
-const WOUNDED_DOOR_BASH_HEAR_MULT := 1.18
-## Heavy bash — a stuffed pack rattles harder when you kick a slab.
-const HEAVY_BAG_DOOR_BASH_HEAR_MULT := 1.15
-## Wounded bash cost — limp kicks also burn more composure.
-const WOUNDED_DOOR_BASH_STAMINA_MULT := 1.25
-## Heavy bash cost — a stuffed pack also burns more composure on the kick.
-const HEAVY_BAG_DOOR_BASH_STAMINA_MULT := 1.18
-## Extract abandon — peeling off a lit pad still rings; don't cheese hold/leave.
-const HEAR_EXTRACT_ABANDON_RANGE := 520.0
-const NOISE_TTL_EXTRACT_ABANDON := 1.1
-const EXTRACT_ABANDON_MIN_PROGRESS := 0.12
-const EXTRACT_ABANDON_STAMINA := 18.0
-const EXTRACT_ABANDON_STUMBLE := 0.35
-## Wounded abandon — limp peel rings the break flare farther.
-const WOUNDED_EXTRACT_ABANDON_HEAR_MULT := 1.18
-## Heavy abandon — a stuffed pack rattles the break flare farther.
-const HEAVY_BAG_EXTRACT_ABANDON_HEAR_MULT := 1.14
 ## Intel pulse — burn a Signal Chip for a short awareness sweep.
 const INTEL_PULSE_TTL := 4.0
 const INTEL_PULSE_COOLDOWN := 1.0
@@ -292,7 +240,85 @@ const NOISE_TTL_FLARE := 3.4
 const FLARE_TOSS_RANGE := 380.0
 const FLARE_COOLDOWN := 1.8
 
+# --- Doors -------------------------------------------------------------------
+## Doors — closed slabs block LOS/path; E pries them open (and shut).
+const DOOR_INTERACT_RANGE := 28.0
+const HEAR_DOOR_PRY_RANGE := 180.0
+const NOISE_TTL_DOOR_PRY := 0.55
+## Crouched pry — soft latch work so you can slip rooms without a stadium clang.
+const HEAR_DOOR_CROUCH_RANGE := 85.0
+const NOISE_TTL_DOOR_CROUCH := 0.4
+const WOUNDED_DOOR_PRY_HEAR_MULT := 1.25
+const HEAVY_BAG_DOOR_PRY_HEAR_MULT := 1.18
 
+# --- Dry-fire ----------------------------------------------------------------
+## Dry-fire click — empty mag still makes a small tell.
+const HEAR_DRYFIRE_RANGE := 95.0
+const NOISE_TTL_DRYFIRE := 0.45
+const CROUCH_DRYFIRE_HEAR_MULT := 0.55
+const BRACE_DRYFIRE_HEAR_MULT := 0.7
+const BRACE_CROUCH_DRYFIRE_HEAR_MULT := 0.42
+const WOUNDED_DRYFIRE_HEAR_MULT := 1.3
+const HEAVY_BAG_DRYFIRE_HEAR_MULT := 1.18
+
+# --- Melee / unarmed ---------------------------------------------------------
+## Empty-mag shove — last-ditch contact weapon when the chamber's dry.
+const MELEE_RANGE := 44.0
+const MELEE_DAMAGE := 22.0
+## Contact hit — no knockback; briefly hobble their move speed instead.
+const MELEE_SLOW_TTL := 0.5
+const MELEE_SLOW_MULT := 0.4
+const MELEE_COOLDOWN := 0.9
+const HEAR_MELEE_RANGE := 200.0
+const NOISE_TTL_MELEE := 0.55
+## Unarmed punch — no gun visible; LMB is fists with shorter reach and quieter tell.
+const PUNCH_RANGE := 48.0
+const PUNCH_DAMAGE := 16.0
+const PUNCH_COOLDOWN := 0.52
+const PUNCH_STAMINA_COST := 14.0
+const MELEE_STAMINA_COST := 18.0
+const PUNCH_MISS_STAMINA_COST := 8.0
+const HEAR_PUNCH_RANGE := 110.0
+const NOISE_TTL_PUNCH := 0.35
+const PUNCH_SWING_TTL := 0.18
+const WOUNDED_MELEE_HEAR_MULT := 1.2
+const HEAVY_BAG_MELEE_HEAR_MULT := 1.15
+## Silent rear drop — crouched empty-mag shove / punch into a dormant's back stays quiet.
+const MELEE_SILENT_DAMAGE := 58.0
+const PUNCH_SILENT_DAMAGE := 48.0
+const HEAR_MELEE_SILENT_RANGE := 55.0
+const NOISE_TTL_MELEE_SILENT := 0.35
+const MELEE_BEHIND_DOT := -0.35
+
+# --- Blood trail -------------------------------------------------------------
+## Blood trail — wounded runners drip scent roamers can track.
+const BLOOD_DRIP_INTERVAL := 0.45
+const BLOOD_TRAIL_TTL := 4.5
+
+# --- Floor traction ----------------------------------------------------------
+## Small, readable biases (never transform the game).
+## Keys: speed / hear / vision multipliers while standing on that decal style.
+const FLOOR_MODS := {
+	"road": {"speed": 1.07, "hear": 1.1, "vision": 1.03},
+	"junction": {"speed": 1.05, "hear": 1.08, "vision": 1.02},
+	"dirt_road": {"speed": 1.02, "hear": 1.0, "vision": 1.0},
+	"pad": {"speed": 1.03, "hear": 1.04, "vision": 1.02},
+	"interior": {"speed": 1.04, "hear": 0.95, "vision": 1.01},
+	"asphalt": {"speed": 1.04, "hear": 1.06, "vision": 1.02},
+	"gravel": {"speed": 0.94, "hear": 1.16, "vision": 1.0},
+	"grass": {"speed": 0.96, "hear": 0.88, "vision": 0.96},
+	"leaf": {"speed": 0.95, "hear": 0.86, "vision": 0.95},
+	"scrub": {"speed": 0.93, "hear": 0.9, "vision": 0.94},
+	"mud": {"speed": 0.9, "hear": 0.92, "vision": 0.97},
+	"pond": {"speed": 0.72, "hear": 1.14, "vision": 0.94},
+	"yard": {"speed": 0.97, "hear": 0.9, "vision": 0.97},
+	"dirt": {"speed": 0.98, "hear": 0.96, "vision": 0.99},
+}
+
+
+# =============================================================================
+# WORLD BOOTSTRAP
+# =============================================================================
 static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skills: Dictionary = {}) -> Dictionary:
 	var skill_state: Dictionary = skills if not skills.is_empty() else Skills.create_state()
 	var world := {
@@ -353,15 +379,22 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 	world["decals"] = field["decals"]
 	world["districts"] = field.get("districts", [])
 	world["landmarks"] = field.get("landmarks", [])
+	# Spatial bins — LOS / floor / draw cull share one index built at world create.
+	world["draw_chunks"] = _build_spatial_index(field["decals"], field["obstacles"])
 	var loot_spots: Array = field.get("loot_spots", [])
 	var roamer_anchors: Array = field.get("roamer_anchors", [])
+	var field_extracts: Array = field.get("extract_sites", [])
 
-	# SW ingress — keep the first steps clear of random rubble.
-	var spawn := _ingress_spawn(world["obstacles"])
+	# Random clear drop-in — never near an extract pad.
+	var spawn := _ingress_spawn(
+		world["obstacles"],
+		field.get("spawn_candidates", []),
+		field.get("extract_sites", [])
+	)
 	world["player"] = _make_actor(world, "player", spawn, {
 		"hp": 100.0,
 		"max_hp": 100.0,
-		"speed": 175.0,
+		"speed": 118.0,
 		"damage": Items.loadout_damage(loadout),
 		"mitigation": Items.loadout_mitigation(loadout),
 		"vision_range": VISION_RANGE,
@@ -421,7 +454,7 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		_refresh_bag_cap(world)
 
 	# Roamers prefer district anchors so voids stay quieter than compounds.
-	for _i in 34:
+	for _i in 36:
 		var sp: Vector2
 		if not roamer_anchors.is_empty() and randf() < 0.78:
 			var anchor: Vector2 = roamer_anchors[_i % roamer_anchors.size()]
@@ -431,16 +464,18 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		world["roamers"].append(_make_actor(world, "roamer", sp, {
 			"hp": randf_range(45.0, 70.0),
 			"max_hp": 70.0,
-			"speed": randf_range(95.0, 135.0),
+			"speed": randf_range(72.0, 96.0),
 			"damage": randf_range(8.0, 14.0),
 			"aggro_range": randf_range(200.0, 320.0),
 			"mitigation": 0.05,
+			"radius": ROAMER_RADIUS,
 		}))
 		world["roamers"].back()["alert_ttl"] = 0.0
 		world["roamers"].back()["last_heard"] = sp
 		world["roamers"].back()["last_seen"] = sp
 		world["roamers"].back()["ai_state"] = "patrol"
 		world["roamers"].back()["patrol_anchor"] = sp
+		world["roamers"].back()["patrol_waypoint"] = Vector2.ZERO
 		world["roamers"].back()["patrol_phase"] = randf() * TAU
 		world["roamers"].back()["search_ttl"] = 0.0
 		world["roamers"].back()["elite"] = false
@@ -450,8 +485,8 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		world["roamers"].back()["suppress_ttl"] = 0.0
 		world["roamers"].back()["forage_ttl"] = 0.0
 		world["roamers"].back()["forage_target_id"] = -1
-		# Some start dormant — deaf to soft walks until a louder cue wakes them.
-		var dormant := randf() < 0.28
+		# Few start dormant — most should be walking a beat.
+		var dormant := randf() < 0.12
 		world["roamers"].back()["dormant"] = dormant
 		if dormant:
 			world["roamers"].back()["ai_state"] = "dormant"
@@ -459,17 +494,17 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 
 	# Containers prefer landmark loot spots; leftovers fill random clear ground.
 	var spawn_plan: Array = []
-	for _i in 20:
-		spawn_plan.append("crate")
-	for _i in 8:
-		spawn_plan.append("ammo_crate")
-	for _i in 7:
-		spawn_plan.append("med_cache")
-	for _i in 6:
-		spawn_plan.append("weapon_case")
-	for _i in 5:
-		spawn_plan.append("intel_safe")
 	for _i in 28:
+		spawn_plan.append("crate")
+	for _i in 11:
+		spawn_plan.append("ammo_crate")
+	for _i in 10:
+		spawn_plan.append("med_cache")
+	for _i in 8:
+		spawn_plan.append("weapon_case")
+	for _i in 7:
+		spawn_plan.append("intel_safe")
+	for _i in 36:
 		spawn_plan.append("ground_loot")
 	spawn_plan.shuffle()
 	# Prefer specialty spots for specialty kinds, ground spots for ground piles.
@@ -515,24 +550,36 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		world["crates"].append({
 			"id": _alloc_id(world),
 			"pos": sp,
-			"radius": 11.0 if is_ground else 17.0,
+			"radius": 16.0 if is_ground else 24.0,
 			"opened": false,
 			"kind": prefer,
 			"contents": Items.roll_container_loot(prefer),
 			"tint": randi(),
 		})
 
-	world["extracts"] = [
-		# Hot NE — short hold, huge flare, roamers pile in hard.
-		{"id": _alloc_id(world), "pos": Vector2(MAP_W - 180, 160), "radius": 58.0, "hold_seconds": 2.1, "progress": 0.0, "active": true, "pressure": "hot", "alarm_radius": 1900.0, "contest_pad": 0.18, "bleed_mult": 1.35},
-		# Quiet NW — long sit, small flare — safer if you can stay still.
-		{"id": _alloc_id(world), "pos": Vector2(160, 160), "radius": 52.0, "hold_seconds": 4.2, "progress": 0.0, "active": true, "pressure": "quiet", "alarm_radius": 700.0, "contest_pad": 0.06, "bleed_mult": 0.7},
-		# Contested south — balanced mid pressure (classic flare).
-		{"id": _alloc_id(world), "pos": Vector2(MAP_W * 0.5, MAP_H - 160), "radius": 56.0, "hold_seconds": 2.9, "progress": 0.0, "active": true, "pressure": "contested", "alarm_radius": EXTRACT_ALARM_RADIUS, "contest_pad": 0.12, "bleed_mult": 1.0},
-		# East mid — secondary lift for the larger compound.
-		{"id": _alloc_id(world), "pos": Vector2(MAP_W - 200, MAP_H * 0.55), "radius": 54.0, "hold_seconds": 3.3, "progress": 0.0, "active": true, "pressure": "contested", "alarm_radius": 1100.0, "contest_pad": 0.1, "bleed_mult": 0.95},
-	]
-	# Landmark each extract approach for labels / minimap.
+	# Extract sites come from the generated layout (positions jittered each run).
+	var extract_defs: Array = field_extracts
+	if extract_defs.is_empty():
+		extract_defs = [
+			{"pressure": "hot", "pos": Vector2(MAP_W - 180, 160), "alarm_radius": 1900.0, "hold_seconds": 2.1, "contest_pad": 0.18, "bleed_mult": 1.35, "radius": 58.0},
+			{"pressure": "quiet", "pos": Vector2(160, 160), "alarm_radius": 700.0, "hold_seconds": 4.2, "contest_pad": 0.06, "bleed_mult": 0.7, "radius": 52.0},
+			{"pressure": "contested", "pos": Vector2(MAP_W * 0.5, MAP_H - 160), "alarm_radius": EXTRACT_ALARM_RADIUS, "hold_seconds": 2.9, "contest_pad": 0.12, "bleed_mult": 1.0, "radius": 56.0},
+			{"pressure": "contested", "pos": Vector2(MAP_W - 200, MAP_H * 0.55), "alarm_radius": 1100.0, "hold_seconds": 3.3, "contest_pad": 0.1, "bleed_mult": 0.95, "radius": 54.0},
+		]
+	world["extracts"] = []
+	for ed in extract_defs:
+		world["extracts"].append({
+			"id": _alloc_id(world),
+			"pos": ed["pos"],
+			"radius": float(ed.get("radius", 54.0)),
+			"hold_seconds": float(ed.get("hold_seconds", 3.0)),
+			"progress": 0.0,
+			"active": true,
+			"pressure": String(ed.get("pressure", "contested")),
+			"alarm_radius": float(ed.get("alarm_radius", EXTRACT_ALARM_RADIUS)),
+			"contest_pad": float(ed.get("contest_pad", 0.12)),
+			"bleed_mult": float(ed.get("bleed_mult", 1.0)),
+		})
 	for z in world["extracts"]:
 		world["landmarks"].append({
 			"id": int(z["id"]),
@@ -550,11 +597,11 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		world["roamers"].append(_make_actor(world, "roamer", sp, {
 			"hp": randf_range(110.0, 140.0),
 			"max_hp": 140.0,
-			"speed": randf_range(105.0, 125.0),
+			"speed": randf_range(78.0, 92.0),
 			"damage": randf_range(16.0, 22.0),
 			"aggro_range": randf_range(340.0, 420.0),
 			"mitigation": 0.22,
-			"radius": 17.0,
+			"radius": ROAMER_RADIUS + 2.0,
 			"vision_range": VISION_RANGE * 1.15,
 		}))
 		var enforcer: Dictionary = world["roamers"].back()
@@ -563,6 +610,7 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		enforcer["last_seen"] = sp
 		enforcer["ai_state"] = "patrol"
 		enforcer["patrol_anchor"] = zp
+		enforcer["patrol_waypoint"] = Vector2.ZERO
 		enforcer["patrol_phase"] = randf() * TAU
 		enforcer["search_ttl"] = 0.0
 		enforcer["elite"] = true
@@ -581,32 +629,130 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 	return world
 
 
-static func has_line_of_sight(from: Vector2, to: Vector2, obstacles: Array) -> bool:
+
+# =============================================================================
+# PERCEPTION / LOS / SPATIAL QUERY
+# =============================================================================
+static func has_line_of_sight(
+	from: Vector2, to: Vector2, obstacles: Array, index: Dictionary = {}
+) -> bool:
+	return _trace_clear(from, to, obstacles, false, index)
+
+
+## Loot / interact reach — walls, closed doors, and window frames all block.
+static func has_clear_reach(
+	from: Vector2, to: Vector2, obstacles: Array, index: Dictionary = {}
+) -> bool:
+	return _trace_clear(from, to, obstacles, true, index)
+
+
+static func _trace_clear(
+	from: Vector2, to: Vector2, obstacles: Array, for_reach: bool, index: Dictionary = {}
+) -> bool:
 	var delta := to - from
 	var dist := delta.length()
 	if dist < 1.0:
 		return true
+	var probe: Array = obstacles
+	if _spatial_index_matches(index, obstacles.size(), -1):
+		probe = _gather_obstacles_along(from, to, obstacles, index)
 	var steps := int(ceil(dist / 12.0))
 	for i in range(1, steps + 1):
 		var t := float(i) / float(steps)
 		var p := from.lerp(to, t)
-		for o in obstacles:
-			if not _obstacle_blocks(o):
+		for o in probe:
+			if for_reach:
+				if not _obstacle_blocks_reach(o):
+					continue
+			elif not _obstacle_blocks_los(o):
 				continue
-			if p.x >= float(o["x"]) and p.x <= float(o["x"]) + float(o["w"]) \
-					and p.y >= float(o["y"]) and p.y <= float(o["y"]) + float(o["h"]):
+			if _point_hits_obstacle(p, o):
 				return false
 	return true
 
 
-static func can_see_actor(viewer: Dictionary, target_pos: Vector2, obstacles: Array) -> bool:
+## True when the index was built for this obstacle/decal array (skip if tests swap lists).
+static func _spatial_index_matches(index: Dictionary, obstacle_count: int, decal_count: int) -> bool:
+	if index.is_empty():
+		return false
+	var cells: Variant = index.get("cells", null)
+	if cells == null or not (cells is Dictionary) or (cells as Dictionary).is_empty():
+		return false
+	if obstacle_count >= 0 and int(index.get("obstacle_count", -1)) != obstacle_count:
+		return false
+	if decal_count >= 0 and int(index.get("decal_count", -1)) != decal_count:
+		return false
+	return true
+
+
+## Obstacles that touch chunks along a segment — keeps LOS off the full solid list.
+static func _gather_obstacles_along(
+	from: Vector2, to: Vector2, obstacles: Array, index: Dictionary
+) -> Array:
+	var cells: Dictionary = index.get("cells", {})
+	var cs := float(index.get("size", SPATIAL_CHUNK))
+	if cs < 1.0 or cells.is_empty():
+		return obstacles
+	# Conservative AABB of the segment (+1 cell) so thin walls can't fall between samples.
+	var x0 := int(floor(minf(from.x, to.x) / cs)) - 1
+	var y0 := int(floor(minf(from.y, to.y) / cs)) - 1
+	var x1 := int(floor(maxf(from.x, to.x) / cs)) + 1
+	var y1 := int(floor(maxf(from.y, to.y) / cs)) + 1
+	var seen: Dictionary = {}
+	var out: Array = []
+	for cy in range(y0, y1 + 1):
+		for cx in range(x0, x1 + 1):
+			var cell: Variant = cells.get("%d:%d" % [cx, cy], null)
+			if cell == null:
+				continue
+			for oi in cell["o"]:
+				if seen.has(oi):
+					continue
+				seen[oi] = true
+				if oi < 0 or oi >= obstacles.size():
+					continue
+				out.append(obstacles[oi])
+	return out
+
+
+static func can_see_actor(
+	viewer: Dictionary, target_pos: Vector2, obstacles: Array, index: Dictionary = {}
+) -> bool:
 	var from: Vector2 = viewer["pos"]
 	var range_v := float(viewer.get("vision_range", VISION_RANGE))
-	if from.distance_to(target_pos) > range_v:
+	if from.distance_squared_to(target_pos) > range_v * range_v:
 		return false
-	return has_line_of_sight(from, target_pos, obstacles)
+	# Optional facing cone — roamers use this; player fog stays omnidirectional.
+	if bool(viewer.get("use_view_cone", false)):
+		var aim: Vector2 = viewer.get("aim", Vector2.ZERO)
+		if aim.length_squared() > 1e-6:
+			var to_t := target_pos - from
+			if to_t.length_squared() > 1e-6 and aim.normalized().dot(to_t.normalized()) < VIEW_CONE_DOT:
+				return false
+	return has_line_of_sight(from, target_pos, obstacles, index)
 
 
+## PZ-style facing gait — forward full, strafe mid, backpedal slowest.
+static func _facing_move_mult(move_dir: Vector2, look_dir: Vector2) -> float:
+	if move_dir.length_squared() < 1e-6:
+		return 1.0
+	var look := look_dir
+	if look.length_squared() < 1e-6:
+		return 1.0
+	look = look.normalized()
+	var align := move_dir.normalized().dot(look)
+	# Forward cone (~±45°) stays near full pace.
+	if align >= VIEW_CONE_DOT:
+		return lerpf(0.92, 1.0, (align - VIEW_CONE_DOT) / (1.0 - VIEW_CONE_DOT))
+	if align >= 0.0:
+		return lerpf(MOVE_STRAFE_MULT, 0.92, align / VIEW_CONE_DOT)
+	return lerpf(MOVE_BACK_MULT, MOVE_STRAFE_MULT, align + 1.0)
+
+
+
+# =============================================================================
+# MAIN TICK
+# =============================================================================
 static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Vector2, shoot: bool, interact: bool, fire_rate: float, use_medkit: bool = false, reload: bool = false, sprint: bool = false, equip: bool = false, distract: bool = false, crouch: bool = false, brace: bool = false, intel_pulse: bool = false, mark_flare: bool = false, shoot_click: bool = false) -> void:
 	if bool(world["over"]):
 		_update_floats(world, dt)
@@ -708,6 +854,8 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 			_tick_stamina(player, dt, false, false)
 			_tick_recoil(player, world["loadout"], dt)
 			var move_dir_ch := move.normalized() if move.length_squared() > 1e-6 else Vector2.ZERO
+			var aim_ch: Vector2 = aim_world - (player["pos"] as Vector2)
+			var want_ch: Vector2 = aim_ch.normalized() if aim_ch.length_squared() > 1e-6 else (player.get("aim", Vector2.RIGHT) as Vector2)
 			var heal_move := 0.35
 			if want_brace_h and want_crouch_h:
 				heal_move = 0.2
@@ -715,13 +863,11 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 				heal_move = 0.26
 			elif want_crouch_h:
 				heal_move = 0.28
+			heal_move *= _facing_move_mult(move_dir_ch, want_ch)
 			var desired_ch: Vector2 = move_dir_ch * float(player["speed"]) * heal_move
 			player["vel"] = _smooth_vec(player.get("vel", Vector2.ZERO), desired_ch, MOVE_BRACE_RESP, dt)
-			player["pos"] = player["pos"] + player["vel"] * dt
-			_collide_actor_obstacles(player, world["obstacles"])
+			_move_actor(player, player["vel"] * dt, world["obstacles"])
 			_clamp_to_map(player, float(world["width"]), float(world["height"]))
-			var aim_ch: Vector2 = aim_world - (player["pos"] as Vector2)
-			var want_ch: Vector2 = aim_ch.normalized() if aim_ch.length_squared() > 1e-6 else (player.get("aim", Vector2.RIGHT) as Vector2)
 			player["aim"] = _smooth_aim(player.get("aim", Vector2.RIGHT), want_ch, AIM_TURN_RESP, dt)
 			player["facing"] = (player["aim"] as Vector2).angle()
 			if float(player["heal_channel"]) <= 0.0:
@@ -778,6 +924,8 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 			_tick_stamina(player, dt, false, false)
 			_tick_recoil(player, world["loadout"], dt)
 			var move_dir_r := move.normalized() if move.length_squared() > 1e-6 else Vector2.ZERO
+			var aim_r: Vector2 = aim_world - (player["pos"] as Vector2)
+			var want_r: Vector2 = aim_r.normalized() if aim_r.length_squared() > 1e-6 else (player.get("aim", Vector2.RIGHT) as Vector2)
 			var reload_move := 0.55
 			if want_brace_r and want_crouch_r:
 				reload_move = 0.32
@@ -785,13 +933,11 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 				reload_move = 0.4
 			elif want_crouch_r:
 				reload_move = 0.42
+			reload_move *= _facing_move_mult(move_dir_r, want_r)
 			var desired_r: Vector2 = move_dir_r * float(player["speed"]) * reload_move
 			player["vel"] = _smooth_vec(player.get("vel", Vector2.ZERO), desired_r, MOVE_BRACE_RESP, dt)
-			player["pos"] = player["pos"] + player["vel"] * dt
-			_collide_actor_obstacles(player, world["obstacles"])
+			_move_actor(player, player["vel"] * dt, world["obstacles"])
 			_clamp_to_map(player, float(world["width"]), float(world["height"]))
-			var aim_r: Vector2 = aim_world - (player["pos"] as Vector2)
-			var want_r: Vector2 = aim_r.normalized() if aim_r.length_squared() > 1e-6 else (player.get("aim", Vector2.RIGHT) as Vector2)
 			player["aim"] = _smooth_aim(player.get("aim", Vector2.RIGHT), want_r, AIM_TURN_RESP, dt)
 			player["facing"] = (player["aim"] as Vector2).angle()
 			if float(player["reload_channel"]) <= 0.0:
@@ -812,7 +958,17 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 	player["punch_swing"] = maxf(0.0, float(player.get("punch_swing", 0.0)) - dt)
 	player["armed"] = Items.loadout_has_weapon(world["loadout"])
 	var move_dir := move.normalized() if move.length_squared() > 1e-6 else Vector2.ZERO
-	var can_sprint := move_dir.length_squared() > 1e-6
+	# Look where the mouse points this frame — gait keys off facing, not last aim.
+	var look_dir: Vector2 = aim_world - (player["pos"] as Vector2)
+	if look_dir.length_squared() > 1e-6:
+		look_dir = look_dir.normalized()
+	else:
+		var prev_look: Vector2 = player.get("aim", Vector2.RIGHT)
+		look_dir = prev_look.normalized() if prev_look.length_squared() > 1e-6 else Vector2.RIGHT
+	var facing_mult := _facing_move_mult(move_dir, look_dir)
+	player["facing_move"] = facing_mult
+	# Sprint only when moving into your look cone — shuffle-strafe can't outrun facing.
+	var can_sprint := move_dir.length_squared() > 1e-6 and facing_mult >= 0.9
 	# Sprint beats crouch/brace — holding both stands you up into a run.
 	# Stance before recoil so aim_spread / shot cone match this frame.
 	var want_crouch := crouch and not sprint
@@ -839,10 +995,13 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 		player["brace_hold"] = float(player.get("brace_hold", 0.0)) + dt * settle_rate
 	else:
 		player["brace_hold"] = 0.0
-	_tick_stamina(player, dt, sprint and can_sprint and not want_crouch, can_sprint)
+	var was_sprinting := bool(player.get("sprinting", false))
+	# Sprint input must be live — Shift can sticky-release in Godot; sim clears if caller lied.
+	var want_sprint_live := sprint and can_sprint and not want_crouch
+	_tick_stamina(player, dt, want_sprint_live, move_dir.length_squared() > 1e-6)
 	_tick_recoil(player, world["loadout"], dt)
 	var speed_mult := 1.0
-	if bool(player["sprinting"]):
+	if bool(player["sprinting"]) and can_sprint:
 		speed_mult = SPRINT_MULT
 	elif want_crouch and want_brace:
 		speed_mult = BRACE_CROUCH_SPEED
@@ -864,24 +1023,36 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 		speed_mult *= FULL_BAG_SPEED
 	elif heavy:
 		speed_mult *= HEAVY_BAG_SPEED
+	# Surface underfoot — asphalt runs, mud/pond drag, brush softens pace.
+	# Cache floor samples; full decal scan every frame was thrashing the big map.
+	var floor_style := String(player.get("floor", "dirt"))
+	var floor_cache: Vector2 = player.get("floor_cache_pos", Vector2(-99999, -99999))
+	if player["pos"].distance_squared_to(floor_cache) > 144.0:
+		floor_style = _floor_at(world, player["pos"])
+		player["floor_cache_pos"] = player["pos"]
+	player["floor"] = floor_style
+	var floor_mods := _floor_mods(floor_style)
+	speed_mult *= float(floor_mods["speed"])
+	# Facing gait last — looking away always costs pace (PZ strafe/backpedal).
+	speed_mult *= facing_mult
 	var desired_vel: Vector2 = move_dir * float(player["speed"]) * speed_mult
 	var move_resp := MOVE_ACCEL_RESP
 	var cur_vel: Vector2 = player.get("vel", Vector2.ZERO)
 	if desired_vel.length_squared() < 1e-4:
 		move_resp = MOVE_STOP_RESP
-	elif bool(player["sprinting"]):
+	elif was_sprinting and not bool(player["sprinting"]):
+		# Release shift — dump run speed immediately so it doesn't coast.
+		move_resp = MOVE_STOP_RESP * 1.35
+	elif bool(player["sprinting"]) and can_sprint:
 		move_resp = MOVE_SPRINT_RESP
 	elif want_brace:
 		move_resp = MOVE_BRACE_RESP
 	elif cur_vel.length_squared() > 1e-4 and desired_vel.dot(cur_vel) < 0.0:
 		move_resp = MOVE_REVERSE_RESP
 	player["vel"] = _smooth_vec(cur_vel, desired_vel, move_resp, dt)
-	player["pos"] = player["pos"] + player["vel"] * dt
-	if bool(player["sprinting"]) and move_dir.length_squared() > 1e-6:
-		_try_sprint_door_bash(world, player, move_dir)
-	_collide_actor_obstacles(player, world["obstacles"])
+	_move_actor(player, player["vel"] * dt, world["obstacles"])
 	_clamp_to_map(player, float(world["width"]), float(world["height"]))
-	if bool(player["sprinting"]):
+	if bool(player["sprinting"]) and can_sprint:
 		world["sprint_meters"] = float(world.get("sprint_meters", 0.0)) + float(player["speed"]) * speed_mult * dt
 		while float(world["sprint_meters"]) >= 110.0:
 			world["sprint_meters"] = float(world["sprint_meters"]) - 110.0
@@ -889,14 +1060,9 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 
 	_tick_blood_trail(world, dt)
 
-	var want_aim: Vector2 = aim_world - (player["pos"] as Vector2)
-	if want_aim.length_squared() > 1e-6:
-		want_aim = want_aim.normalized()
-	else:
-		var prev_aim: Vector2 = player.get("aim", Vector2.RIGHT)
-		want_aim = prev_aim if prev_aim.length_squared() > 1e-6 else Vector2.RIGHT
+	var want_aim: Vector2 = look_dir
 	var aim_resp := AIM_TURN_RESP
-	if bool(player["sprinting"]):
+	if bool(player["sprinting"]) and can_sprint:
 		aim_resp = AIM_TURN_SPRINT_RESP
 	elif want_brace:
 		aim_resp = AIM_TURN_BRACE_RESP
@@ -1003,6 +1169,7 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 		# Limp run — critical HP also telegraphs a sprint farther.
 		if bool(player.get("wounded", false)):
 			sprint_r *= WOUNDED_SPRINT_HEAR_MULT
+		sprint_r *= float(_floor_mods(String(player.get("floor", "dirt")))["hear"])
 		_emit_noise(world, player["pos"], sprint_r, NOISE_TTL_SPRINT)
 	elif float(player.get("stumble_ttl", 0.0)) > 0.0:
 		if want_crouch:
@@ -1045,6 +1212,7 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 		if hp_ratio_w <= WOUNDED_HP_RATIO:
 			walk_r *= WOUNDED_WALK_HEAR_MULT
 			walk_ttl *= 1.08
+		walk_r *= float(_floor_mods(String(player.get("floor", "dirt")))["hear"])
 		_emit_noise(world, player["pos"], walk_r, walk_ttl)
 
 	if equip:
@@ -1067,6 +1235,10 @@ static func step_raid(world: Dictionary, dt: float, move: Vector2, aim_world: Ve
 	_refresh_bag_cap(world)
 
 
+
+# =============================================================================
+# COMBAT — RELOAD / RECOIL / SUPPRESSION
+# =============================================================================
 static func _begin_reload(world: Dictionary) -> void:
 	var player: Dictionary = world["player"]
 	if not Items.loadout_has_weapon(world["loadout"]):
@@ -1130,6 +1302,10 @@ static func _interrupt_reload(world: Dictionary) -> void:
 	_push_float(world, player["pos"], "RELOAD STOPPED", Color("e85454"), 0.9)
 
 
+
+# =============================================================================
+# PLAYER VITALS — STAMINA / STANCE
+# =============================================================================
 static func _tick_stamina(player: Dictionary, dt: float, want_sprint: bool, moving: bool) -> void:
 	var stamina_max := float(player.get("stamina_max", STAMINA_MAX))
 	var stamina := float(player.get("stamina", stamina_max))
@@ -1233,12 +1409,16 @@ static func _apply_recoil_kick(player: Dictionary, world: Dictionary) -> void:
 	var bloom := float(player.get("recoil_bloom", 0.0))
 	var skill_mult := float(player.get("recoil_mult", 1.0))
 	player["recoil_bloom"] = minf(float(stats["max_bloom"]), bloom + float(stats["recoil"]) * skill_mult)
-	world["shake"] = maxf(float(world.get("shake", 0.0)), float(stats["kick"]))
+	# No camera shake on fire — kick bloom already sells recoil without a screen wobble.
 	# Refresh cone immediately so the next frame's wedge matches the kick.
 	var stance_mult := _stance_spread_mult(player)
 	player["aim_spread"] = (float(stats["spread"]) + float(player["recoil_bloom"])) * stance_mult * skill_mult
 
 
+
+# =============================================================================
+# NOISE / COMPASS
+# =============================================================================
 static func _emit_noise(world: Dictionary, pos: Vector2, radius: float, ttl: float) -> void:
 	# Keep the louder / longer noise if both sprint and shots fire the same frame.
 	if radius >= float(world.get("noise_radius", 0.0)) or ttl >= float(world.get("noise_ttl", 0.0)):
@@ -1280,6 +1460,10 @@ static func _update_extract_compass(world: Dictionary) -> void:
 	world["nearest_extract_pressure"] = best_pressure
 
 
+
+# =============================================================================
+# INVENTORY / MEDKIT CHANNELS
+# =============================================================================
 static func _try_equip_from_bag(world: Dictionary) -> void:
 	var player: Dictionary = world["player"]
 	if float(player.get("heal_channel", 0.0)) > 0.0 or float(player.get("reload_channel", 0.0)) > 0.0 \
@@ -1412,7 +1596,12 @@ static func _find_loot_target(world: Dictionary) -> Variant:
 			bias = -8.0
 		elif kind == "corpse":
 			bias = -4.0
-		if d <= float(c["radius"]) + float(player["radius"]) + 10.0 and d + bias < best:
+		if d > float(c["radius"]) + float(player["radius"]) + 10.0:
+			continue
+		# No ghost-loot through walls, shut doors, or window frames.
+		if not has_clear_reach(player["pos"], c["pos"], world["obstacles"], world.get("draw_chunks", {})):
+			continue
+		if d + bias < best:
 			best = d + bias
 			nearest = c
 	return nearest
@@ -1445,6 +1634,10 @@ static func _loot_channel_for_kind(kind: String) -> float:
 			return LOOT_CHANNEL_CRATE
 
 
+
+# =============================================================================
+# INTERACT — DOORS / LOOT CHANNELS
+# =============================================================================
 static func _try_interact(world: Dictionary) -> void:
 	var loot = _find_loot_target(world)
 	var door = _find_door_target(world)
@@ -1474,57 +1667,23 @@ static func _find_door_target(world: Dictionary) -> Variant:
 	return nearest
 
 
-static func _try_sprint_door_bash(world: Dictionary, player: Dictionary, move_dir: Vector2) -> void:
-	# Probe a short step ahead — if a closed door sits there, kick it open.
-	var ahead := move_dir.normalized() * (float(player["radius"]) + 14.0)
-	var probes: Array = [player["pos"] + ahead, player["pos"] + ahead * 0.5, player["pos"]]
-	for o in world["obstacles"]:
-		if String(o.get("kind", "")) != "door" or bool(o.get("open", false)):
-			continue
-		var hit := false
-		for probe in probes:
-			var p: Vector2 = probe
-			if p.x >= float(o["x"]) and p.x <= float(o["x"]) + float(o["w"]) \
-					and p.y >= float(o["y"]) and p.y <= float(o["y"]) + float(o["h"]):
-				hit = true
-				break
-		if not hit:
-			continue
-		o["open"] = true
-		var center := Vector2(float(o["x"]) + float(o["w"]) * 0.5, float(o["y"]) + float(o["h"]) * 0.5)
-		var bash_cost := DOOR_BASH_STAMINA
-		# Limp kick — critical HP also burns more composure on the plant.
-		if bool(player.get("wounded", false)):
-			bash_cost *= WOUNDED_DOOR_BASH_STAMINA_MULT
-		# Greedy pack — stuffing the bag also burns more composure on the kick.
-		if bool(player.get("heavy_bag", false)):
-			bash_cost *= HEAVY_BAG_DOOR_BASH_STAMINA_MULT
-		player["stamina"] = maxf(0.0, float(player.get("stamina", 0.0)) - bash_cost)
-		var bash_r := HEAR_DOOR_BASH_RANGE
-		# Limp kick — critical HP telegraphs a bash farther.
-		if bool(player.get("wounded", false)):
-			bash_r *= WOUNDED_DOOR_BASH_HEAR_MULT
-		# Greedy pack — stuffing the bag also telegraphs a bash farther.
-		if bool(player.get("heavy_bag", false)):
-			bash_r *= HEAVY_BAG_DOOR_BASH_HEAR_MULT
-		_emit_noise(world, center, bash_r, NOISE_TTL_DOOR_BASH)
-		_push_float(world, center, "BASH", Color("e6b35a"), 0.9)
-		_set_message(world, "Door bashed open — loud.", 1.4)
-		world["skill_deeds"] = int(world.get("skill_deeds", 0)) + 1
-		return
-
-
 static func _toggle_door(world: Dictionary, door: Dictionary) -> void:
-	door["open"] = not bool(door.get("open", false))
 	var center := Vector2(float(door["x"]) + float(door["w"]) * 0.5, float(door["y"]) + float(door["h"]) * 0.5)
 	var player: Dictionary = world["player"]
+	var opening := not bool(door.get("open", false))
+	# Can't shut while anyone is standing in the doorway.
+	if not opening and _doorway_occupied(world, door):
+		_set_message(world, "Step clear of the door.", 1.1)
+		_push_float(world, center, "BLOCKED", Color("e6b35a"), 0.55)
+		return
+	door["open"] = opening
 	var quiet := bool(player.get("crouching", false)) and not bool(player.get("sprinting", false))
 	var hp_ratio := float(player.get("hp", 1.0)) / maxf(1.0, float(player.get("max_hp", 1.0)))
 	var wounded_clang := (not quiet) and hp_ratio <= WOUNDED_HP_RATIO
 	var used_d := float(Items.inventory_used(world["inventory"]))
 	var cap_d := maxf(1.0, float(world["inventory_cap"]))
 	var heavy_clang := (not quiet) and (used_d / cap_d >= HEAVY_BAG_RATIO or bool(player.get("heavy_bag", false)))
-	if bool(door["open"]):
+	if opening:
 		if quiet:
 			_set_message(world, "Door eased open.", 1.2)
 			_push_float(world, center, "SOFT", Color("9de8ff"), 0.65)
@@ -1552,6 +1711,35 @@ static func _toggle_door(world: Dictionary, door: Dictionary) -> void:
 			_set_message(world, "Door shut.")
 			_push_float(world, center, "SHUT", Color("8fa3b8"), 0.7)
 			_emit_noise(world, center, shut_r, NOISE_TTL_DOOR_PRY * 0.85)
+
+
+static func _actor_overlaps_door(actor: Dictionary, door: Dictionary) -> bool:
+	var r := Rect2(float(door["x"]), float(door["y"]), float(door["w"]), float(door["h"]))
+	var rad := float(actor.get("radius", ACTOR_RADIUS))
+	var p: Vector2 = actor["pos"]
+	var nearest := Vector2(clampf(p.x, r.position.x, r.end.x), clampf(p.y, r.position.y, r.end.y))
+	return p.distance_squared_to(nearest) <= rad * rad
+
+
+static func _doorway_occupied(world: Dictionary, door: Dictionary) -> bool:
+	if _actor_overlaps_door(world["player"], door):
+		return true
+	for roamer in world.get("roamers", []):
+		if not bool(roamer.get("alive", true)):
+			continue
+		if _actor_overlaps_door(roamer, door):
+			return true
+	return false
+
+
+## Roamer pry — open a closed door in their path (not a sprint auto-bash).
+static func open_door_for_roamer(world: Dictionary, door: Dictionary) -> void:
+	if bool(door.get("open", false)):
+		return
+	door["open"] = true
+	var center := Vector2(float(door["x"]) + float(door["w"]) * 0.5, float(door["y"]) + float(door["h"]) * 0.5)
+	_push_float(world, center, "OPEN", Color("c45c5c"), 0.55)
+	_emit_noise(world, center, HEAR_DOOR_PRY_RANGE * 0.85, NOISE_TTL_DOOR_PRY)
 
 
 static func _begin_loot(world: Dictionary) -> void:
@@ -1605,6 +1793,10 @@ static func _tick_loot_channel(world: Dictionary, dt: float, move: Vector2, aim_
 		_interrupt_loot(world, "Moved off the loot — ransack cancelled.")
 		_post_channel_world(world, dt)
 		return
+	if not has_clear_reach(player["pos"], target["pos"], world["obstacles"], world.get("draw_chunks", {})):
+		_interrupt_loot(world, "Blocked — ransack cancelled.")
+		_post_channel_world(world, dt)
+		return
 
 	player["crouching"] = crouch
 	var loot_rate := CROUCH_LOOT_RATE if crouch else 1.0
@@ -1621,14 +1813,14 @@ static func _tick_loot_channel(world: Dictionary, dt: float, move: Vector2, aim_
 	_tick_stamina(player, dt, false, false)
 	_tick_recoil(player, world["loadout"], dt)
 	var move_dir := move.normalized() if move.length_squared() > 1e-6 else Vector2.ZERO
-	# Slow shuffle while hands are busy; crouch is even tighter.
-	var shuffle := 0.22 if crouch else 0.28
+	var look_l: Vector2 = aim_world - (player["pos"] as Vector2)
+	look_l = look_l.normalized() if look_l.length_squared() > 1e-6 else Vector2.RIGHT
+	# Slow shuffle while hands are busy; crouch is even tighter; facing still matters.
+	var shuffle := (0.22 if crouch else 0.28) * _facing_move_mult(move_dir, look_l)
 	player["vel"] = move_dir * float(player["speed"]) * shuffle
-	player["pos"] = player["pos"] + player["vel"] * dt
-	_collide_actor_obstacles(player, world["obstacles"])
+	_move_actor(player, player["vel"] * dt, world["obstacles"])
 	_clamp_to_map(player, float(world["width"]), float(world["height"]))
-	var aim: Vector2 = aim_world - (player["pos"] as Vector2)
-	player["aim"] = aim.normalized() if aim.length_squared() > 1e-6 else Vector2.RIGHT
+	player["aim"] = look_l
 	# Continuous clatter — quieter when crouched over the lid; greed rattles louder.
 	var hear := HEAR_RANSACK_RANGE * (CROUCH_RANSACK_HEAR_MULT if crouch else 1.0)
 	var used_l := float(Items.inventory_used(world["inventory"]))
@@ -1739,6 +1931,10 @@ static func _finish_loot(world: Dictionary, nearest: Dictionary) -> void:
 		world["skill_deeds"] = int(world.get("skill_deeds", 0)) + 1
 
 
+
+# =============================================================================
+# GADGETS — DISTRACT TOSS
+# =============================================================================
 static func _try_distract_toss(world: Dictionary, crouch: bool = false, brace: bool = false) -> void:
 	var player: Dictionary = world["player"]
 	if float(player.get("distract_cooldown", 0.0)) > 0.0:
@@ -1824,6 +2020,10 @@ static func _smooth_aim(current: Vector2, desired: Vector2, responsivity: float,
 	return Vector2.from_angle(a0 + da * clampf(t, 0.0, 1.0))
 
 
+
+# =============================================================================
+# MELEE / UNARMED
+# =============================================================================
 static func _try_empty_mag_shove(world: Dictionary) -> bool:
 	## Back-compat alias — empty mag still shoves.
 	return _try_melee(world, false)
@@ -1933,7 +2133,6 @@ static func _try_melee(world: Dictionary, unarmed: bool = false) -> bool:
 			melee_r *= HEAVY_BAG_MELEE_HEAR_MULT
 		_emit_noise(world, player["pos"], melee_r, melee_ttl)
 		_push_float(world, target["pos"] + Vector2(0, -14), "PUNCH" if unarmed else "SHOVE", Color("e6b35a"), 0.7)
-	_push_float(world, target["pos"], "-%d" % int(ceil(dmg)), Color("ffd0d0"), 0.5)
 	if float(target["hp"]) <= 0.0:
 		target["alive"] = false
 		var elite := bool(target.get("elite", false))
@@ -1959,6 +2158,9 @@ static func _try_melee(world: Dictionary, unarmed: bool = false) -> bool:
 	return true
 
 
+# =============================================================================
+# GADGETS — INTEL / MARK FLARE
+# =============================================================================
 static func _try_intel_pulse(world: Dictionary) -> void:
 	if float(world.get("intel_pulse_cd", 0.0)) > 0.0:
 		_set_message(world, "Intel still cooling.", 0.8)
@@ -2025,9 +2227,13 @@ static func _try_mark_flare(world: Dictionary) -> void:
 	_set_message(world, "Flare lit — contacts pull toward the bang.", 2.2)
 	_push_float(world, impact, "FLARE", Color("ff8a4a"), 1.3)
 	world["skill_deeds"] = int(world.get("skill_deeds", 0)) + 1
-	world["shake"] = maxf(float(world.get("shake", 0.0)), 4.0)
+	world["shake"] = maxf(float(world.get("shake", 0.0)), 1.8)
 
 
+
+# =============================================================================
+# RAID RESOLVE / LOADOUT AFTERMATH
+# =============================================================================
 static func finalize_raid_result(world: Dictionary) -> Dictionary:
 	var outcome: Variant = world["outcome"]
 	if outcome == "extracted":
@@ -2143,22 +2349,47 @@ static func _wear_armor(world: Dictionary, absorbed: float, base_mit: float) -> 
 		_push_float(world, player["pos"], "ARMOR CRACKED", Color("e6b35a"), 1.0)
 
 
-## SW drop-in pad — clear of solids so New Run never starts inside a wall.
-static func _ingress_spawn(obstacles: Array) -> Vector2:
-	var candidates: Array = [
-		Vector2(280, MAP_H - 280),
-		Vector2(360, MAP_H - 320),
-		Vector2(220, MAP_H - 360),
-		Vector2(420, MAP_H - 240),
-		Vector2(300, MAP_H - 200),
-	]
+## Random clear drop-in — must stay far from every extract site.
+
+# =============================================================================
+# MAP GENERATION — DISTRICTS / ROADS / PREFABS
+# =============================================================================
+static func _ingress_spawn(obstacles: Array, candidates: Array = [], extract_sites: Array = []) -> Vector2:
+	var picks: Array = []
 	for p in candidates:
-		if _place_away_from(obstacles, p.x, p.y, 22.0):
-			return p
-	return _rand_clear_pos(obstacles, 22.0, 80.0)
+		var v: Vector2 = p
+		if _spawn_far_from_extracts(v, extract_sites) and _place_away_from(obstacles, v.x, v.y, 22.0):
+			picks.append(v)
+	picks.shuffle()
+	for v2 in picks:
+		return v2
+	# Search near valid candidates only (never seed from extract pads).
+	for p2 in candidates:
+		var base: Vector2 = p2
+		if not _spawn_far_from_extracts(base, extract_sites):
+			continue
+		for _try in 12:
+			var near := _rand_near(obstacles, base, 160.0, 22.0)
+			if _spawn_far_from_extracts(near, extract_sites) and _place_away_from(obstacles, near.x, near.y, 22.0):
+				return near
+	# Last resort — scan map pockets away from extracts.
+	for _scan in 80:
+		var p3 := Vector2(randf_range(120.0, MAP_W - 120.0), randf_range(120.0, MAP_H - 120.0))
+		if _spawn_far_from_extracts(p3, extract_sites) and _place_away_from(obstacles, p3.x, p3.y, 22.0):
+			return p3
+	return _roll_ingress_pos(extract_sites)
 
 
-## District compound — road spine, themed cells, prefab buildings, landmark loot anchors.
+static func _spawn_far_from_extracts(pos: Vector2, extract_sites: Array) -> bool:
+	for ex in extract_sites:
+		var ep: Vector2 = ex["pos"] if ex is Dictionary else ex
+		var pad := float(ex["radius"]) if ex is Dictionary and ex.has("radius") else 60.0
+		if pos.distance_to(ep) < SPAWN_EXTRACT_MIN_DIST + pad:
+			return false
+	return true
+
+
+## District compound — jittered cells, bent road graph, non-overlapping prefabs.
 static func _build_field() -> Dictionary:
 	var obstacles: Array = []
 	var decals: Array = []
@@ -2166,30 +2397,31 @@ static func _build_field() -> Dictionary:
 	var landmarks: Array = []
 	var loot_spots: Array = []
 	var roamer_anchors: Array = []
+	var road_rects: Array = []
+	var building_rects: Array = []
+	var spawn_candidates: Array = []
 	var door_id := -200
 	var landmark_seq := 1
+	var road_w := randf_range(88.0, 112.0)
 
-	var extracts: Array = [
-		{"name": "HOT", "pos": Vector2(MAP_W - 180, 160), "kind": "extract"},
-		{"name": "QUIET", "pos": Vector2(160, 160), "kind": "extract"},
-		{"name": "SOUTH", "pos": Vector2(MAP_W * 0.5, MAP_H - 160), "kind": "extract"},
-		{"name": "EAST", "pos": Vector2(MAP_W - 200, MAP_H * 0.55), "kind": "extract"},
-	]
-	var ingress := Vector2(280, MAP_H - 280)
+	# Turf base is drawn solid in the scene — skip map-wide organic tiles (they thrash near compounds).
 
-	# --- District grid (~8 themed cells) ---
-	var cell_defs: Array = [
-		{"x": 0.0, "y": MAP_H * 0.62, "w": MAP_W * 0.32, "h": MAP_H * 0.38, "theme": "ingress", "name": "Ingress"},
-		{"x": MAP_W * 0.28, "y": MAP_H * 0.62, "w": MAP_W * 0.40, "h": MAP_H * 0.38, "theme": "yard", "name": "Yards"},
-		{"x": MAP_W * 0.64, "y": MAP_H * 0.55, "w": MAP_W * 0.36, "h": MAP_H * 0.45, "theme": "extract", "name": "South Approach"},
-		{"x": 0.0, "y": MAP_H * 0.28, "w": MAP_W * 0.30, "h": MAP_H * 0.36, "theme": "warehouse", "name": "Warehouse Row"},
-		{"x": MAP_W * 0.28, "y": MAP_H * 0.28, "w": MAP_W * 0.40, "h": MAP_H * 0.36, "theme": "ruins", "name": "Ruins"},
-		{"x": MAP_W * 0.64, "y": MAP_H * 0.28, "w": MAP_W * 0.36, "h": MAP_H * 0.30, "theme": "warehouse", "name": "East Sheds"},
-		{"x": 0.0, "y": 0.0, "w": MAP_W * 0.38, "h": MAP_H * 0.30, "theme": "extract", "name": "NW Approach"},
-		{"x": MAP_W * 0.36, "y": 0.0, "w": MAP_W * 0.64, "h": MAP_H * 0.30, "theme": "extract", "name": "NE Approach"},
-	]
+	# --- Random extract sites (edge-biased) + random ingress corner ---
+	var extract_sites: Array = _roll_extract_sites()
+	var ingress := _roll_ingress_pos(extract_sites)
+	spawn_candidates.append(ingress)
+	for _s in 6:
+		spawn_candidates.append(ingress + Vector2(randf_range(-90, 90), randf_range(-90, 90)))
+
+	# --- Jittered district cells with shuffled themes ---
+	var cell_defs := _roll_district_cells(ingress)
 	for d in cell_defs:
 		var theme := String(d["theme"])
+		# Compact wash around district center — keep small so roads stay readable.
+		var cx := float(d["x"]) + float(d["w"]) * 0.5
+		var cy := float(d["y"]) + float(d["h"]) * 0.5
+		var ww := minf(float(d["w"]) * 0.38, 380.0)
+		var hh := minf(float(d["h"]) * 0.38, 300.0)
 		var wash := "yard"
 		match theme:
 			"ingress":
@@ -2202,79 +2434,95 @@ static func _build_field() -> Dictionary:
 				wash = "dirt"
 			"extract":
 				wash = "gravel"
+		# District aprons stay cheap rects — organic blobs are for field nature only.
 		decals.append({
-			"x": float(d["x"]) + 20.0,
-			"y": float(d["y"]) + 20.0,
-			"w": float(d["w"]) - 40.0,
-			"h": float(d["h"]) - 40.0,
-			"style": wash,
-			"theme": theme,
+			"x": cx - ww * 0.5, "y": cy - hh * 0.5, "w": ww, "h": hh,
+			"style": wash, "theme": theme,
 		})
 		districts.append(d.duplicate(true))
-		var center := Vector2(float(d["x"]) + float(d["w"]) * 0.5, float(d["y"]) + float(d["h"]) * 0.5)
 		if theme != "ingress":
-			roamer_anchors.append(center)
-			landmarks.append({
-				"id": landmark_seq,
-				"name": String(d["name"]),
-				"pos": center,
-				"kind": "district",
-			})
+			roamer_anchors.append(Vector2(cx, cy))
+			landmarks.append({"id": landmark_seq, "name": String(d["name"]), "pos": Vector2(cx, cy), "kind": "district"})
 			landmark_seq += 1
 
-	# --- Road spine: cross + ring, linking ingress to extracts ---
-	var road_w := 92.0
-	var hx := [
-		MAP_H * 0.22 + randf_range(-60.0, 60.0),
-		MAP_H * 0.48 + randf_range(-50.0, 50.0),
-		MAP_H * 0.74 + randf_range(-50.0, 50.0),
-	]
-	var vx := [
-		MAP_W * 0.22 + randf_range(-70.0, 70.0),
-		MAP_W * 0.50 + randf_range(-60.0, 60.0),
-		MAP_W * 0.76 + randf_range(-70.0, 70.0),
-	]
-	for y in hx:
-		decals.append({"x": 80.0, "y": float(y) - road_w * 0.5, "w": MAP_W - 160.0, "h": road_w, "style": "road"})
-	for x in vx:
-		decals.append({"x": float(x) - road_w * 0.5, "y": 80.0, "w": road_w, "h": MAP_H - 160.0, "style": "road"})
-	# Ingress feeder + extract approach stubs.
-	decals.append({"x": 80.0, "y": MAP_H - 360.0, "w": 520.0, "h": 100.0, "style": "road"})
-	decals.append({"x": 80.0, "y": MAP_H - 520.0, "w": 440.0, "h": 360.0, "style": "pad"})
-	for ex in extracts:
+	# --- Road graph: bent segments between hubs (not full-map strips) ---
+	var hubs: Array = [ingress]
+	for ex in extract_sites:
+		hubs.append(ex["pos"])
+	for d2 in cell_defs:
+		if String(d2["theme"]) == "ingress":
+			continue
+		hubs.append(Vector2(float(d2["x"]) + float(d2["w"]) * 0.5, float(d2["y"]) + float(d2["h"]) * 0.5))
+	# Asphalt to extracts; dirt tracks between districts (reference mix).
+	for i in extract_sites.size():
+		_append_road_path(decals, road_rects, ingress, extract_sites[i]["pos"], road_w, "road")
+	var district_hubs: Array = hubs.slice(1 + extract_sites.size())
+	district_hubs.shuffle()
+	for i in mini(district_hubs.size() - 1, 10):
+		var track := "dirt_road" if randf() < 0.55 else "road"
+		_append_road_path(decals, road_rects, district_hubs[i], district_hubs[i + 1], road_w * 0.85, track)
+	# Extra cross-links so the larger grid doesn't leave dead ends.
+	if district_hubs.size() >= 4:
+		_append_road_path(decals, road_rects, district_hubs[0], district_hubs[district_hubs.size() - 1], road_w * 0.8, "dirt_road")
+		_append_road_path(
+			decals, road_rects,
+			district_hubs[1],
+			district_hubs[mini(district_hubs.size() - 1, 5)],
+			road_w * 0.75,
+			"road" if randf() < 0.45 else "dirt_road"
+		)
+
+	# Ingress / extract pads — compact apron (no giant yellow wash under compounds).
+	decals.append({"x": ingress.x - 70.0, "y": ingress.y - 70.0, "w": 140.0, "h": 140.0, "style": "pad", "theme": "ingress"})
+	for ex in extract_sites:
 		var ep: Vector2 = ex["pos"]
-		decals.append({
-			"x": ep.x - 140.0, "y": ep.y - 140.0, "w": 280.0, "h": 280.0, "style": "pad", "theme": "extract",
-		})
-		# Short road stub toward map center.
-		var toward := Vector2(MAP_W * 0.5, MAP_H * 0.5) - ep
-		var stub_len := 420.0
-		var stub_dir := toward.normalized()
-		var mid := ep + stub_dir * (stub_len * 0.45)
-		if absf(stub_dir.x) > absf(stub_dir.y):
-			decals.append({"x": mid.x - stub_len * 0.5, "y": mid.y - 40.0, "w": stub_len, "h": 80.0, "style": "road"})
-		else:
-			decals.append({"x": mid.x - 40.0, "y": mid.y - stub_len * 0.5, "w": 80.0, "h": stub_len, "style": "road"})
+		decals.append({"x": ep.x - 64.0, "y": ep.y - 64.0, "w": 128.0, "h": 128.0, "style": "pad", "theme": "extract"})
+		decals.append({"x": ep.x - 48.0, "y": ep.y - 48.0, "w": 96.0, "h": 96.0, "style": "asphalt", "theme": "extract"})
 		roamer_anchors.append(ep)
-		loot_spots.append({"pos": ep, "radius": 160.0, "prefer": "ground"})
+		loot_spots.append({"pos": ep, "radius": 140.0, "prefer": "ground"})
+		# Never add extract pads to spawn_candidates — that was dropping players on lifts.
 
-	# Thin barrier strips along some road stretches for roadside cover.
-	for i in 10:
-		var along_h := randf() < 0.5
-		if along_h:
-			var y := float(hx[i % hx.size()]) + (48.0 if i % 2 == 0 else -48.0) - 12.0
-			var x := randf_range(200.0, MAP_W - 420.0)
-			if x < 700.0 and y > MAP_H - 700.0:
-				continue
-			obstacles.append({"x": x, "y": y, "w": randf_range(140.0, 280.0), "h": 24.0, "style": "wall", "kind": "solid"})
+	# Cheap road shoulders (rects, not organic blobs) + sparse verge props.
+	for i in mini(road_rects.size(), 14):
+		var rr: Rect2 = road_rects[i]
+		if mini(rr.size.x, rr.size.y) > road_w * 1.2:
+			continue  # junction pad
+		var horiz := rr.size.x >= rr.size.y
+		var side_n := Vector2(0, 1) if horiz else Vector2(1, 0)
+		var shoulder_w := 28.0
+		if horiz:
+			decals.append({
+				"x": rr.position.x, "y": rr.position.y - shoulder_w,
+				"w": rr.size.x, "h": shoulder_w, "style": "gravel", "theme": "nature",
+			})
+			decals.append({
+				"x": rr.position.x, "y": rr.end.y,
+				"w": rr.size.x, "h": shoulder_w, "style": "gravel", "theme": "nature",
+			})
 		else:
-			var x2 := float(vx[i % vx.size()]) + (48.0 if i % 2 == 0 else -48.0) - 12.0
-			var y2 := randf_range(200.0, MAP_H - 420.0)
-			if x2 < 700.0 and y2 > MAP_H - 700.0:
-				continue
-			obstacles.append({"x": x2, "y": y2, "w": 24.0, "h": randf_range(140.0, 280.0), "style": "wall", "kind": "solid"})
+			decals.append({
+				"x": rr.position.x - shoulder_w, "y": rr.position.y,
+				"w": shoulder_w, "h": rr.size.y, "style": "gravel", "theme": "nature",
+			})
+			decals.append({
+				"x": rr.end.x, "y": rr.position.y,
+				"w": shoulder_w, "h": rr.size.y, "style": "gravel", "theme": "nature",
+			})
+		var side := side_n if randf() < 0.5 else -side_n
+		var along := rr.get_center() + side * (road_w * 0.7 + 56.0)
+		var verge := Rect2(along.x - 36, along.y - 28, 72, 56)
+		if _rect_hits_reserved(verge, road_rects, [], extract_sites, ingress):
+			continue
+		if _rect_hits_solids(verge, obstacles, 10.0):
+			continue
+		if randf() < 0.55:
+			_try_place_prop(obstacles, along + Vector2(randf_range(-16, 16), randf_range(-12, 12)), "tree" if randf() < 0.6 else "bush", randf_range(52.0, 78.0))
+		elif randf() < 0.4:
+			_try_place_prop(obstacles, along, "rock", randf_range(26.0, 42.0))
+		if randf() < 0.35:
+			loot_spots.append({"pos": along, "radius": 90.0, "prefer": "ground"})
 
-	# --- Buildings per district theme ---
+	# --- Buildings: reject road / extract / other-building overlap ---
 	var shed_names := ["Tool Shed", "Guard Hut", "Side Shed", "Pump House"]
 	var wh_names := ["Warehouse A", "Warehouse B", "Cold Store", "Loading Bay"]
 	var yard_names := ["Courtyard", "Motor Pool", "Open Yard", "Scrap Court"]
@@ -2283,107 +2531,162 @@ static func _build_field() -> Dictionary:
 
 	for d in cell_defs:
 		var theme := String(d["theme"])
+		if theme == "ingress":
+			continue
 		var dx := float(d["x"])
 		var dy := float(d["y"])
 		var dw := float(d["w"])
 		var dh := float(d["h"])
-		if theme == "ingress":
-			continue
-		var count := 2
-		var styles: Array = ["shed", "shed"]
+		var count := 3
+		var styles: Array = ["shed", "shed", "shed"]
 		match theme:
 			"yard":
-				count = 3
-				styles = ["courtyard", "shed", "shed"]
+				count = 3 + randi() % 3
+				styles = ["courtyard", "shed", "shed", "shed", "courtyard"]
 			"warehouse":
-				count = 3
-				styles = ["warehouse", "warehouse", "shed"]
+				count = 3 + randi() % 3
+				styles = ["warehouse", "warehouse", "shed", "shed", "warehouse"]
 			"ruins":
-				count = 4
-				styles = ["shed", "courtyard", "bunker", "shed"]
+				count = 4 + randi() % 3
+				styles = ["shed", "courtyard", "bunker", "shed", "shed", "courtyard"]
 			"extract":
-				count = 2
-				styles = ["bunker", "shed"]
+				count = 2 + randi() % 2
+				styles = ["bunker", "shed", "shed"]
+		styles.shuffle()
 		for bi in count:
 			var prefab := String(styles[bi % styles.size()])
-			var bw := 240.0
-			var bh := 200.0
+			var bw := 200.0
+			var bh := 170.0
 			match prefab:
 				"shed":
-					bw = randf_range(160.0, 240.0)
-					bh = randf_range(140.0, 200.0)
+					bw = randf_range(220.0, 320.0)
+					bh = randf_range(190.0, 270.0)
 				"warehouse":
-					bw = randf_range(360.0, 520.0)
-					bh = randf_range(200.0, 280.0)
+					bw = randf_range(440.0, 620.0)
+					bh = randf_range(260.0, 360.0)
 				"courtyard":
-					bw = randf_range(280.0, 400.0)
-					bh = randf_range(240.0, 340.0)
+					bw = randf_range(360.0, 500.0)
+					bh = randf_range(300.0, 420.0)
 				"bunker":
-					bw = randf_range(180.0, 260.0)
-					bh = randf_range(160.0, 220.0)
-			var ox := dx + randf_range(60.0, maxf(60.0, dw - bw - 60.0))
-			var oy := dy + randf_range(60.0, maxf(60.0, dh - bh - 60.0))
-			# Keep SW ingress apron clear.
-			if ox < 700.0 and oy + bh > MAP_H - 700.0:
+					bw = randf_range(240.0, 340.0)
+					bh = randf_range(210.0, 300.0)
+			var placed := false
+			for _try in 28:
+				var ox := dx + randf_range(24.0, maxf(24.0, dw - bw - 24.0))
+				var oy := dy + randf_range(24.0, maxf(24.0, dh - bh - 24.0))
+				# Bias toward roads so compounds plug into the street grid.
+				if (not road_rects.is_empty()) and _try < 18:
+					var rr: Rect2 = road_rects[randi() % road_rects.size()]
+					if rr.size.x >= rr.size.y:
+						ox = clampf(rr.get_center().x + randf_range(-bw * 0.35, bw * 0.35) - bw * 0.5, dx + 20.0, dx + dw - bw - 20.0)
+						oy = clampf(rr.end.y + randf_range(6.0, 36.0), dy + 20.0, dy + dh - bh - 20.0)
+						if randf() < 0.5:
+							oy = clampf(rr.position.y - bh - randf_range(6.0, 36.0), dy + 20.0, dy + dh - bh - 20.0)
+					else:
+						oy = clampf(rr.get_center().y + randf_range(-bh * 0.35, bh * 0.35) - bh * 0.5, dy + 20.0, dy + dh - bh - 20.0)
+						ox = clampf(rr.end.x + randf_range(6.0, 36.0), dx + 20.0, dx + dw - bw - 20.0)
+						if randf() < 0.5:
+							ox = clampf(rr.position.x - bw - randf_range(6.0, 36.0), dx + 20.0, dx + dw - bw - 20.0)
+				var foot := Rect2(ox - 10.0, oy - 10.0, bw + 20.0, bh + 20.0)
+				if _rect_hits_reserved(foot, road_rects, building_rects, extract_sites, ingress):
+					continue
+				building_rects.append(Rect2(ox, oy, bw, bh))
+				# Apron + interior floor (thin-wall inset).
+				decals.append({
+					"x": ox - 14.0, "y": oy - 14.0, "w": bw + 28.0, "h": bh + 28.0,
+					"style": "pad", "theme": theme,
+				})
+				if prefab != "courtyard":
+					decals.append({
+						"x": ox + 12.0, "y": oy + 12.0, "w": bw - 24.0, "h": bh - 24.0,
+						"style": "interior", "theme": theme,
+					})
+				else:
+					decals.append({
+						"x": ox + 12.0, "y": oy + 12.0, "w": bw - 24.0, "h": bh - 24.0,
+						"style": "yard", "theme": theme,
+					})
+				var bname := "Structure"
+				match prefab:
+					"shed":
+						bname = shed_names[name_i % shed_names.size()]
+					"warehouse":
+						bname = wh_names[name_i % wh_names.size()]
+					"courtyard":
+						bname = yard_names[name_i % yard_names.size()]
+					"bunker":
+						bname = bunker_names[name_i % bunker_names.size()]
+				name_i += 1
+				var center_b := Vector2(ox + bw * 0.5, oy + bh * 0.5)
+				landmarks.append({"id": landmark_seq, "name": bname, "pos": center_b, "kind": prefab})
+				landmark_seq += 1
+				door_id = _append_prefab(obstacles, Vector2(ox, oy), bw, bh, prefab, door_id)
+				var door_out := Vector2(ox + bw + 4.0, oy + bh * 0.5)
+				_append_door_apron(decals, door_out)
+				_append_structure_road_link(decals, road_rects, door_out, Rect2(ox, oy, bw, bh))
+				_append_building_sidewalk(decals, road_rects, Rect2(ox, oy, bw, bh))
+				var prefer := "crate"
+				if prefab == "bunker" or prefab == "warehouse":
+					prefer = "specialty"
+				elif prefab == "courtyard":
+					prefer = "ground"
+				loot_spots.append({"pos": center_b, "radius": 70.0, "prefer": prefer})
+				loot_spots.append({"pos": center_b + Vector2(randf_range(-30, 30), randf_range(-24, 24)), "radius": 70.0, "prefer": prefer})
+				# Cover beside the stoop — never stacked in the doorway lane.
+				var cover_at := Vector2(ox + bw + 48.0, oy + bh * 0.5 + 58.0)
+				if randf() < 0.5:
+					cover_at.y = oy + bh * 0.5 - 58.0
+				if not _rect_hits_reserved(Rect2(cover_at.x - 24, cover_at.y - 24, 48, 48), road_rects, building_rects, extract_sites, ingress) \
+						and not _rect_hits_solids(Rect2(cover_at.x - 24, cover_at.y - 24, 48, 48), obstacles, 8.0):
+					_append_cover_cluster(obstacles, cover_at, 1 + randi() % 2)
+				roamer_anchors.append(center_b)
+				placed = true
+				break
+			if not placed:
 				continue
-			# Avoid paving over extract pads.
-			var blocked := false
-			for ex2 in extracts:
-				var ep2: Vector2 = ex2["pos"]
-				if Rect2(ox - 40.0, oy - 40.0, bw + 80.0, bh + 80.0).has_point(ep2):
-					blocked = true
-					break
-			if blocked:
-				continue
-			decals.append({
-				"x": ox - 24.0, "y": oy - 24.0, "w": bw + 48.0, "h": bh + 48.0,
-				"style": "pad", "theme": theme,
-			})
-			var bname := "Structure"
-			match prefab:
-				"shed":
-					bname = shed_names[name_i % shed_names.size()]
-				"warehouse":
-					bname = wh_names[name_i % wh_names.size()]
-				"courtyard":
-					bname = yard_names[name_i % yard_names.size()]
-				"bunker":
-					bname = bunker_names[name_i % bunker_names.size()]
-			name_i += 1
-			var center_b := Vector2(ox + bw * 0.5, oy + bh * 0.5)
-			landmarks.append({"id": landmark_seq, "name": bname, "pos": center_b, "kind": prefab})
-			landmark_seq += 1
-			door_id = _append_prefab(obstacles, Vector2(ox, oy), bw, bh, prefab, door_id)
-			# Loot: interiors / courtyard edges; bunkers & warehouses prefer specialty.
-			var prefer := "crate"
-			if prefab == "bunker" or prefab == "warehouse":
-				prefer = "specialty"
-			elif prefab == "courtyard":
-				prefer = "ground"
-			loot_spots.append({"pos": center_b, "radius": 70.0, "prefer": prefer})
-			loot_spots.append({"pos": center_b + Vector2(randf_range(-40, 40), randf_range(-30, 30)), "radius": 80.0, "prefer": prefer})
-			# Door-side cover cluster.
-			_append_cover_cluster(obstacles, Vector2(ox + bw + 20.0, oy + bh * 0.5), 3)
-			roamer_anchors.append(center_b)
 
-	# Roadside cover packs + light rubble away from ingress.
-	for _i in 22:
-		var along := Vector2(
-			float(vx[randi() % vx.size()]) + randf_range(-80.0, 80.0),
-			float(hx[randi() % hx.size()]) + randf_range(-80.0, 80.0)
-		)
-		if along.x < 700.0 and along.y > MAP_H - 700.0:
+	# Guarantee each prefab style exists (smoke + visual variety) even on unlucky rolls.
+	var have := {}
+	for o in obstacles:
+		have[String(o.get("style", ""))] = true
+	for need in ["shed", "warehouse", "courtyard", "bunker"]:
+		if have.has(need):
 			continue
-		_append_cover_cluster(obstacles, along, 2 + randi() % 3)
-		if randf() < 0.45:
-			loot_spots.append({"pos": along, "radius": 100.0, "prefer": "ground"})
+		var nw := 200.0
+		var nh := 170.0
+		match need:
+			"warehouse":
+				nw = 380.0
+				nh = 220.0
+			"courtyard":
+				nw = 300.0
+				nh = 260.0
+			"bunker":
+				nw = 200.0
+				nh = 180.0
+		for _g in 30:
+			var gx := randf_range(200.0, MAP_W - nw - 200.0)
+			var gy := randf_range(200.0, MAP_H - nh - 200.0)
+			var gf := Rect2(gx - 16.0, gy - 16.0, nw + 32.0, nh + 32.0)
+			if _rect_hits_reserved(gf, road_rects, building_rects, extract_sites, ingress):
+				continue
+			building_rects.append(Rect2(gx, gy, nw, nh))
+			door_id = _append_prefab(obstacles, Vector2(gx, gy), nw, nh, need, door_id)
+			landmarks.append({"id": landmark_seq, "name": need.capitalize(), "pos": Vector2(gx + nw * 0.5, gy + nh * 0.5), "kind": need})
+			landmark_seq += 1
+			loot_spots.append({"pos": Vector2(gx + nw * 0.5, gy + nh * 0.5), "radius": 70.0, "prefer": "specialty" if need in ["bunker", "warehouse"] else "crate"})
+			break
 
-	for _i in 18:
-		var w := randf_range(40.0, 140.0)
-		var h := randf_range(36.0, 120.0)
+	# Sparse rubble off roads / buildings / other solids.
+	for _i in 12:
+		var w := randf_range(36.0, 90.0)
+		var h := randf_range(32.0, 80.0)
 		var ox := randf_range(80.0, MAP_W - w - 80.0)
 		var oy := randf_range(80.0, MAP_H - h - 80.0)
-		if ox < 700.0 and oy > MAP_H - 700.0:
+		var foot2 := Rect2(ox, oy, w, h)
+		if _rect_hits_reserved(foot2.grow(24.0), road_rects, building_rects, extract_sites, ingress):
+			continue
+		if _rect_hits_solids(foot2, obstacles, 12.0):
 			continue
 		obstacles.append({
 			"x": ox, "y": oy, "w": w, "h": h,
@@ -2391,10 +2694,23 @@ static func _build_field() -> Dictionary:
 			"kind": "solid",
 		})
 
-	# Hard-clear ingress + extract pads so starts / lifts aren't buried in solids.
+	# Nature + field clutter — grass washes, trees, rocks, ponds (keeps compounds from reading empty).
+	_scatter_nature(decals, obstacles, road_rects, building_rects, extract_sites, ingress)
+
+	# Keep door lanes and pads clear after all clutter rolls.
+	_carve_door_clearance(obstacles)
 	_carve_clear_disk(obstacles, ingress, 160.0)
-	for ex3 in extracts:
+	for ex3 in extract_sites:
 		_carve_clear_disk(obstacles, ex3["pos"], 120.0)
+
+	# Final filter — only hand create_raid_world candidates that are extract-safe.
+	var safe_spawns: Array = []
+	for sc in spawn_candidates:
+		var sv: Vector2 = sc
+		if _spawn_far_from_extracts(sv, extract_sites):
+			safe_spawns.append(sv)
+	if safe_spawns.is_empty():
+		safe_spawns.append(ingress)
 
 	return {
 		"obstacles": obstacles,
@@ -2403,7 +2719,362 @@ static func _build_field() -> Dictionary:
 		"landmarks": landmarks,
 		"loot_spots": loot_spots,
 		"roamer_anchors": roamer_anchors,
+		"spawn_candidates": safe_spawns,
+		"extract_sites": extract_sites,
 	}
+
+
+## Bin decals/obstacles into spatial cells for view cull + LOS/floor probes.
+
+# =============================================================================
+# SPATIAL INDEX
+# =============================================================================
+static func _build_spatial_index(decals: Array, obstacles: Array) -> Dictionary:
+	var cells := {}
+	for i in decals.size():
+		var d: Dictionary = decals[i]
+		_spatial_put(cells, float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"]), i, true)
+	for i in obstacles.size():
+		var o: Dictionary = obstacles[i]
+		# Fringe forest is paint-only — keep it out of LOS/collision bins.
+		if String(o.get("kind", "")) == "deco" or bool(o.get("fringe", false)):
+			continue
+		_spatial_put(cells, float(o["x"]), float(o["y"]), float(o["w"]), float(o["h"]), i, false)
+	return {
+		"size": SPATIAL_CHUNK,
+		"cells": cells,
+		"obstacle_count": obstacles.size(),
+		"decal_count": decals.size(),
+	}
+
+
+static func _spatial_put(
+	cells: Dictionary, x: float, y: float, w: float, h: float, idx: int, is_decal: bool
+) -> void:
+	var cs := SPATIAL_CHUNK
+	var x0 := int(floor(x / cs))
+	var y0 := int(floor(y / cs))
+	var x1 := int(floor((x + maxf(1.0, w)) / cs))
+	var y1 := int(floor((y + maxf(1.0, h)) / cs))
+	for cx in range(x0, x1 + 1):
+		for cy in range(y0, y1 + 1):
+			var key := "%d:%d" % [cx, cy]
+			if not cells.has(key):
+				cells[key] = {"d": [], "o": []}
+			if is_decal:
+				cells[key]["d"].append(idx)
+			else:
+				cells[key]["o"].append(idx)
+
+
+static func _roll_extract_sites() -> Array:
+	## Four edge lifts with pressure roles; positions jitter so layouts diverge.
+	var sites: Array = [
+		{
+			"pressure": "hot",
+			"pos": Vector2(MAP_W - randf_range(140, 320), randf_range(120, 280)),
+			"alarm_radius": 1900.0, "hold_seconds": 2.1, "contest_pad": 0.18, "bleed_mult": 1.35, "radius": 58.0,
+		},
+		{
+			"pressure": "quiet",
+			"pos": Vector2(randf_range(120, 300), randf_range(120, 280)),
+			"alarm_radius": 700.0, "hold_seconds": 4.2, "contest_pad": 0.06, "bleed_mult": 0.7, "radius": 52.0,
+		},
+		{
+			"pressure": "contested",
+			"pos": Vector2(MAP_W * randf_range(0.38, 0.62), MAP_H - randf_range(120, 280)),
+			"alarm_radius": EXTRACT_ALARM_RADIUS, "hold_seconds": 2.9, "contest_pad": 0.12, "bleed_mult": 1.0, "radius": 56.0,
+		},
+		{
+			"pressure": "contested",
+			"pos": Vector2(MAP_W - randf_range(140, 300), MAP_H * randf_range(0.42, 0.68)),
+			"alarm_radius": 1100.0, "hold_seconds": 3.3, "contest_pad": 0.1, "bleed_mult": 0.95, "radius": 54.0,
+		},
+	]
+	return sites
+
+
+static func _roll_ingress_pos(extract_sites: Array) -> Vector2:
+	## Drop-in away from extracts — random edge pocket each run.
+	var best := Vector2(280, MAP_H - 280)
+	var best_d := -1.0
+	for _i in 48:
+		var edge := randi() % 4
+		var c: Vector2
+		match edge:
+			0: # south
+				c = Vector2(randf_range(180, MAP_W - 180), MAP_H - randf_range(180, 520))
+			1: # north
+				c = Vector2(randf_range(180, MAP_W - 180), randf_range(180, 520))
+			2: # west
+				c = Vector2(randf_range(180, 520), randf_range(180, MAP_H - 180))
+			_: # east
+				c = Vector2(MAP_W - randf_range(180, 520), randf_range(180, MAP_H - 180))
+		if not _spawn_far_from_extracts(c, extract_sites):
+			# Track farthest fallback so we never silently pick an extract apron.
+			var mind := INF
+			for ex in extract_sites:
+				mind = minf(mind, c.distance_to(ex["pos"]))
+			if mind > best_d:
+				best_d = mind
+				best = c
+			continue
+		return c
+	return best
+
+
+static func _roll_district_cells(ingress: Vector2) -> Array:
+	## Soft 4×4 grid with jitter — more compounds across the larger map.
+	var cols: Array = [0.0]
+	var rows: Array = [0.0]
+	for i in 3:
+		cols.append(MAP_W * ((float(i) + 1.0) * 0.25 + randf_range(-0.03, 0.03)))
+		rows.append(MAP_H * ((float(i) + 1.0) * 0.25 + randf_range(-0.03, 0.03)))
+	cols.append(MAP_W)
+	rows.append(MAP_H)
+	cols.sort()
+	rows.sort()
+	var themes: Array = [
+		"yard", "warehouse", "ruins", "warehouse",
+		"extract", "yard", "ruins", "warehouse",
+		"yard", "ruins", "extract", "warehouse",
+		"yard", "ruins", "warehouse",
+	]
+	themes.shuffle()
+	var names := [
+		"Yards", "Warehouse Row", "Ruins", "East Sheds",
+		"North Approach", "South Approach", "Scrap Lot", "Hard Zone",
+		"Motor Court", "Cold Stores", "West Quarters", "Central Lot",
+		"Tank Farm", "Rail Spur", "Outer Pens",
+	]
+	var cells: Array = []
+	var ti := 0
+	for gy in 4:
+		for gx in 4:
+			var x0 := float(cols[gx])
+			var y0 := float(rows[gy])
+			var x1 := float(cols[gx + 1])
+			var y1 := float(rows[gy + 1])
+			var cell := Rect2(x0, y0, x1 - x0, y1 - y0)
+			if cell.has_point(ingress):
+				cells.append({"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "theme": "ingress", "name": "Ingress"})
+				continue
+			var theme := String(themes[ti % themes.size()])
+			var nm := String(names[ti % names.size()])
+			ti += 1
+			cells.append({"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "theme": theme, "name": nm})
+	return cells
+
+
+## Corridor — asphalt uses hard elbows; dirt tracks wander with organic blobs.
+static func _append_road_path(
+	decals: Array, road_rects: Array, a: Vector2, b: Vector2, road_w: float, style: String = "road"
+) -> void:
+	if style == "dirt_road":
+		_append_dirt_track(decals, road_rects, a, b, road_w)
+		return
+	var mid := Vector2(
+		lerpf(a.x, b.x, randf_range(0.4, 0.6)) + randf_range(-70.0, 70.0),
+		lerpf(a.y, b.y, randf_range(0.4, 0.6)) + randf_range(-55.0, 55.0)
+	)
+	mid.x = clampf(mid.x, 140.0, MAP_W - 140.0)
+	mid.y = clampf(mid.y, 140.0, MAP_H - 140.0)
+	var elbows: Array = []
+	if randf() < 0.5:
+		elbows = [Vector2(mid.x, a.y), Vector2(mid.x, b.y)]
+		_append_road_segment(decals, road_rects, a, elbows[0], road_w, style)
+		_append_road_segment(decals, road_rects, elbows[0], elbows[1], road_w, style)
+		_append_road_segment(decals, road_rects, elbows[1], b, road_w, style)
+	else:
+		elbows = [Vector2(a.x, mid.y), Vector2(b.x, mid.y)]
+		_append_road_segment(decals, road_rects, a, elbows[0], road_w, style)
+		_append_road_segment(decals, road_rects, elbows[0], elbows[1], road_w, style)
+		_append_road_segment(decals, road_rects, elbows[1], b, road_w, style)
+	for el in elbows:
+		_append_road_junction(decals, road_rects, el, road_w)
+	_append_road_junction(decals, road_rects, a, road_w * 0.85)
+	_append_road_junction(decals, road_rects, b, road_w * 0.85)
+
+
+## Winding dirt track — polyline with jitter, painted as organic blobs.
+static func _append_dirt_track(decals: Array, road_rects: Array, a: Vector2, b: Vector2, road_w: float) -> void:
+	var pts: Array = [a]
+	var steps := 3 + randi() % 3
+	for i in steps:
+		var t := float(i + 1) / float(steps + 1)
+		var p := a.lerp(b, t)
+		p += Vector2(randf_range(-140.0, 140.0), randf_range(-110.0, 110.0))
+		p.x = clampf(p.x, 120.0, MAP_W - 120.0)
+		p.y = clampf(p.y, 120.0, MAP_H - 120.0)
+		pts.append(p)
+	pts.append(b)
+	for i in pts.size() - 1:
+		var p0: Vector2 = pts[i]
+		var p1: Vector2 = pts[i + 1]
+		_append_road_segment(decals, road_rects, p0, p1, road_w * randf_range(0.75, 1.05), "dirt_road")
+
+
+## Paint-only ground wash — cheap rects (organic disks were thrashing near compounds).
+static func _append_organic_wash(
+	decals: Array, center: Vector2, w: float, h: float, style: String, theme: String = "nature"
+) -> void:
+	decals.append({
+		"x": center.x - w * 0.5, "y": center.y - h * 0.5,
+		"w": w, "h": h,
+		"style": style, "theme": theme,
+		"organic": style == "pond", "seed": randi(),
+	})
+
+
+static func _append_road_junction(decals: Array, road_rects: Array, at: Vector2, road_w: float) -> void:
+	var s := road_w * 1.05
+	var r := Rect2(at.x - s * 0.5, at.y - s * 0.5, s, s)
+	for existing in road_rects:
+		var er: Rect2 = existing
+		if er.intersects(r):
+			var overlap := er.intersection(r)
+			if overlap.get_area() > r.get_area() * 0.65:
+				return
+	road_rects.append(r)
+	decals.append({"x": r.position.x, "y": r.position.y, "w": r.size.x, "h": r.size.y, "style": "junction"})
+
+
+static func _append_road_segment(
+	decals: Array, road_rects: Array, a: Vector2, b: Vector2, road_w: float, style: String = "road"
+) -> void:
+	var min_x := minf(a.x, b.x)
+	var max_x := maxf(a.x, b.x)
+	var min_y := minf(a.y, b.y)
+	var max_y := maxf(a.y, b.y)
+	# Skip degenerate stubs — they read as asphalt freckles.
+	if absf(max_x - min_x) < 28.0 and absf(max_y - min_y) < 28.0:
+		return
+	var r: Rect2
+	if absf(max_x - min_x) >= absf(max_y - min_y):
+		r = Rect2(min_x, (a.y + b.y) * 0.5 - road_w * 0.5, maxf(28.0, max_x - min_x), road_w)
+	else:
+		r = Rect2((a.x + b.x) * 0.5 - road_w * 0.5, min_y, road_w, maxf(28.0, max_y - min_y))
+	# Absorb into an existing co-linear segment instead of stacking translucent slabs.
+	for i in road_rects.size():
+		var er: Rect2 = road_rects[i]
+		if not er.intersects(r.grow(4.0)):
+			continue
+		var same_h := absf(er.size.y - r.size.y) < 8.0 and absf(er.get_center().y - r.get_center().y) < 10.0 \
+			and er.size.x >= er.size.y and r.size.x >= r.size.y
+		var same_v := absf(er.size.x - r.size.x) < 8.0 and absf(er.get_center().x - r.get_center().x) < 10.0 \
+			and er.size.y >= er.size.x and r.size.y >= r.size.x
+		if same_h or same_v:
+			var merged := er.merge(r)
+			road_rects[i] = merged
+			# Update matching decal in place (same surface style only).
+			for d in decals:
+				if String(d.get("style", "")) != style:
+					continue
+				if absf(float(d["x"]) - er.position.x) < 0.5 and absf(float(d["y"]) - er.position.y) < 0.5:
+					d["x"] = merged.position.x
+					d["y"] = merged.position.y
+					d["w"] = merged.size.x
+					d["h"] = merged.size.y
+					return
+			return
+		var overlap := er.intersection(r)
+		if overlap.get_area() > r.get_area() * 0.7:
+			return
+	road_rects.append(r)
+	var d := {"x": r.position.x, "y": r.position.y, "w": r.size.x, "h": r.size.y, "style": style}
+	decals.append(d)
+
+
+static func _rect_hits_reserved(foot: Rect2, road_rects: Array, building_rects: Array, extract_sites: Array, ingress: Vector2) -> bool:
+	if foot.grow(40.0).has_point(ingress):
+		return true
+	for ex in extract_sites:
+		var ep: Vector2 = ex["pos"]
+		if foot.grow(30.0).has_point(ep) or foot.intersects(Rect2(ep.x - 100.0, ep.y - 100.0, 200.0, 200.0)):
+			return true
+	# Tight road margin — compounds may sit flush and link with driveways.
+	for rr in road_rects:
+		if foot.intersects((rr as Rect2).grow(2.0)):
+			return true
+	for br in building_rects:
+		# Tighter spacing — denser compounds on the larger map.
+		if foot.intersects((br as Rect2).grow(16.0)):
+			return true
+	return false
+
+
+## Sidewalk strip on the building face closest to a road — compounds meet the street.
+static func _append_building_sidewalk(decals: Array, road_rects: Array, foot: Rect2) -> void:
+	if road_rects.is_empty():
+		return
+	var center := foot.get_center()
+	var best_pt := center
+	var best_d := INF
+	for rr in road_rects:
+		var r: Rect2 = rr
+		var p := Vector2(clampf(center.x, r.position.x, r.end.x), clampf(center.y, r.position.y, r.end.y))
+		var d := center.distance_to(p)
+		if d < best_d:
+			best_d = d
+			best_pt = p
+	if best_d > 130.0:
+		return
+	var sw := 22.0
+	var to_road := best_pt - center
+	if absf(to_road.x) >= absf(to_road.y):
+		if to_road.x >= 0.0:
+			decals.append({
+				"x": foot.end.x, "y": foot.position.y + 8.0, "w": sw, "h": foot.size.y - 16.0,
+				"style": "pad", "theme": "yard",
+			})
+		else:
+			decals.append({
+				"x": foot.position.x - sw, "y": foot.position.y + 8.0, "w": sw, "h": foot.size.y - 16.0,
+				"style": "pad", "theme": "yard",
+			})
+	else:
+		if to_road.y >= 0.0:
+			decals.append({
+				"x": foot.position.x + 8.0, "y": foot.end.y, "w": foot.size.x - 16.0, "h": sw,
+				"style": "pad", "theme": "yard",
+			})
+		else:
+			decals.append({
+				"x": foot.position.x + 8.0, "y": foot.position.y - sw, "w": foot.size.x - 16.0, "h": sw,
+				"style": "pad", "theme": "yard",
+			})
+
+
+## Road spur from door stoop — merges into the nearest street and pads the join.
+static func _append_structure_road_link(
+	decals: Array, road_rects: Array, door_out: Vector2, foot: Rect2 = Rect2()
+) -> void:
+	if road_rects.is_empty():
+		return
+	var best_pt := door_out
+	var best_d := INF
+	for rr in road_rects:
+		var r: Rect2 = rr
+		var p := Vector2(
+			clampf(door_out.x, r.position.x, r.end.x),
+			clampf(door_out.y, r.position.y, r.end.y)
+		)
+		var d := door_out.distance_to(p)
+		if d < best_d:
+			best_d = d
+			best_pt = p
+	if best_d < 6.0 or best_d > 260.0:
+		return
+	_append_road_segment(decals, road_rects, door_out, best_pt, 52.0, "road")
+	# Junction blot at the street meet so the spur doesn't dead-end into a hard edge.
+	_append_road_junction(decals, road_rects, best_pt, 56.0)
+	# Extend building apron toward the road when close enough to read as connected.
+	if foot.size.x > 1.0 and best_d < 120.0:
+		var mid := door_out.lerp(best_pt, 0.45)
+		decals.append({
+			"x": mid.x - 36.0, "y": mid.y - 28.0, "w": 72.0, "h": 56.0,
+			"style": "pad", "theme": "yard",
+		})
 
 
 ## Prefab dispatcher — shed / warehouse / courtyard / bunker.
@@ -2430,22 +3101,66 @@ static func _door_rect(obstacles: Array, x: float, y: float, w: float, h: float,
 	})
 
 
+static func _window_rect(obstacles: Array, x: float, y: float, w: float, h: float) -> void:
+	obstacles.append({
+		"x": x, "y": y, "w": w, "h": h,
+		"kind": "window", "style": "window", "broken": false,
+	})
+
+
+## Long wall run with glass cuts — walk-blocked, LOS-open.
+static func _wall_run_with_windows(
+	obstacles: Array, x: float, y: float, w: float, h: float, style: String, want_windows: bool = true
+) -> void:
+	var horiz := w >= h
+	var length := w if horiz else h
+	if (not want_windows) or length < 110.0:
+		_wall_rect(obstacles, x, y, w, h, style)
+		return
+	var win_len := mini(34.0, length * 0.22)
+	var count := 1 if length < 200.0 else 2
+	var cuts: Array = []
+	for i in count:
+		var at := length * (float(i) + 1.0) / float(count + 1) - win_len * 0.5
+		cuts.append(clampf(at, 12.0, length - win_len - 12.0))
+	var cursor := 0.0
+	for cut_v in cuts:
+		var cut := float(cut_v)
+		var solid_len := cut - cursor
+		if solid_len > 8.0:
+			if horiz:
+				_wall_rect(obstacles, x + cursor, y, solid_len, h, style)
+			else:
+				_wall_rect(obstacles, x, y + cursor, w, solid_len, style)
+		if horiz:
+			_window_rect(obstacles, x + cut, y, win_len, h)
+		else:
+			_window_rect(obstacles, x, y + cut, w, win_len)
+		cursor = cut + win_len
+	var rem := length - cursor
+	if rem > 6.0:
+		if horiz:
+			_wall_rect(obstacles, x + cursor, y, rem, h, style)
+		else:
+			_wall_rect(obstacles, x, y + cursor, w, rem, style)
+
+
 ## Small 1-door room with light interior clutter.
 static func _append_shed(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
-	var t := 26.0
+	var t := 14.0
 	var ox := origin.x
 	var oy := origin.y
-	_wall_rect(obstacles, ox, oy, bw, t, "shed")
-	_wall_rect(obstacles, ox, oy + bh - t, bw, t, "shed")
-	_wall_rect(obstacles, ox, oy + t, t, bh - t * 2.0, "shed")
-	var door_h := 68.0
+	_wall_run_with_windows(obstacles, ox, oy, bw, t, "shed")
+	_wall_run_with_windows(obstacles, ox, oy + bh - t, bw, t, "shed")
+	_wall_run_with_windows(obstacles, ox, oy + t, t, bh - t * 2.0, "shed")
+	var door_h := 56.0
 	var door_y := oy + (bh - door_h) * 0.5
 	var east_x := ox + bw - t
-	var top_h := maxf(20.0, door_y - (oy + t))
+	var top_h := maxf(18.0, door_y - (oy + t))
 	var bot_y := door_y + door_h
-	var bot_h := maxf(20.0, (oy + bh - t) - bot_y)
-	_wall_rect(obstacles, east_x, oy + t, t, top_h, "shed")
-	_wall_rect(obstacles, east_x, bot_y, t, bot_h, "shed")
+	var bot_h := maxf(18.0, (oy + bh - t) - bot_y)
+	_wall_run_with_windows(obstacles, east_x, oy + t, t, top_h, "shed", top_h >= 70.0)
+	_wall_run_with_windows(obstacles, east_x, bot_y, t, bot_h, "shed", bot_h >= 70.0)
 	_door_rect(obstacles, east_x, door_y, t, door_h, door_id)
 	if randf() < 0.75:
 		var iw := randf_range(30.0, 56.0)
@@ -2459,27 +3174,27 @@ static func _append_shed(obstacles: Array, origin: Vector2, bw: float, bh: float
 
 ## Long hall, two doors, interior columns.
 static func _append_warehouse(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
-	var t := 28.0
+	var t := 16.0
 	var ox := origin.x
 	var oy := origin.y
-	_wall_rect(obstacles, ox, oy, bw, t, "warehouse")
-	_wall_rect(obstacles, ox, oy + bh - t, bw, t, "warehouse")
+	_wall_run_with_windows(obstacles, ox, oy, bw, t, "warehouse")
+	_wall_run_with_windows(obstacles, ox, oy + bh - t, bw, t, "warehouse")
 	# West wall with north door.
-	var door_h := 70.0
+	var door_h := 56.0
 	var west_door_y := oy + bh * 0.28
-	_wall_rect(obstacles, ox, oy + t, t, maxf(20.0, west_door_y - (oy + t)), "warehouse")
+	_wall_run_with_windows(obstacles, ox, oy + t, t, maxf(16.0, west_door_y - (oy + t)), "warehouse")
 	_door_rect(obstacles, ox, west_door_y, t, door_h, door_id)
 	door_id -= 1
 	var west_bot_y := west_door_y + door_h
-	_wall_rect(obstacles, ox, west_bot_y, t, maxf(20.0, (oy + bh - t) - west_bot_y), "warehouse")
+	_wall_run_with_windows(obstacles, ox, west_bot_y, t, maxf(16.0, (oy + bh - t) - west_bot_y), "warehouse")
 	# East wall with south door.
 	var east_x := ox + bw - t
 	var east_door_y := oy + bh * 0.58
-	_wall_rect(obstacles, east_x, oy + t, t, maxf(20.0, east_door_y - (oy + t)), "warehouse")
+	_wall_run_with_windows(obstacles, east_x, oy + t, t, maxf(16.0, east_door_y - (oy + t)), "warehouse")
 	_door_rect(obstacles, east_x, east_door_y, t, door_h, door_id)
 	door_id -= 1
 	var east_bot_y := east_door_y + door_h
-	_wall_rect(obstacles, east_x, east_bot_y, t, maxf(20.0, (oy + bh - t) - east_bot_y), "warehouse")
+	_wall_run_with_windows(obstacles, east_x, east_bot_y, t, maxf(16.0, (oy + bh - t) - east_bot_y), "warehouse")
 	# Interior support columns — break LOS down the hall.
 	var cols := 2 + randi() % 2
 	for ci in cols:
@@ -2499,22 +3214,22 @@ static func _append_warehouse(obstacles: Array, origin: Vector2, bw: float, bh: 
 
 ## U-shape open toward the nearest road (south side open).
 static func _append_courtyard(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
-	var t := 28.0
+	var t := 16.0
 	var ox := origin.x
 	var oy := origin.y
-	_wall_rect(obstacles, ox, oy, bw, t, "courtyard")
+	_wall_run_with_windows(obstacles, ox, oy, bw, t, "courtyard")
 	# West arm — optional door gap mid-wall.
-	var door_h := 64.0
+	var door_h := 56.0
 	var door_y := oy + bh * 0.45
 	if randf() < 0.55:
-		_wall_rect(obstacles, ox, oy + t, t, maxf(16.0, door_y - (oy + t)), "courtyard")
+		_wall_run_with_windows(obstacles, ox, oy + t, t, maxf(14.0, door_y - (oy + t)), "courtyard")
 		_door_rect(obstacles, ox, door_y, t, door_h, door_id)
 		door_id -= 1
 		var west_bot := door_y + door_h
-		_wall_rect(obstacles, ox, west_bot, t, maxf(16.0, (oy + bh - t) - west_bot), "courtyard")
+		_wall_run_with_windows(obstacles, ox, west_bot, t, maxf(14.0, (oy + bh - t) - west_bot), "courtyard")
 	else:
-		_wall_rect(obstacles, ox, oy + t, t, bh - t * 2.0, "courtyard")
-	_wall_rect(obstacles, ox + bw - t, oy + t, t, bh - t * 2.0, "courtyard")
+		_wall_run_with_windows(obstacles, ox, oy + t, t, bh - t * 2.0, "courtyard")
+	_wall_run_with_windows(obstacles, ox + bw - t, oy + t, t, bh - t * 2.0, "courtyard")
 	# Partial south lips so the open mouth still reads as a courtyard.
 	var lip := bw * 0.28
 	_wall_rect(obstacles, ox, oy + bh - t, lip, t, "courtyard")
@@ -2531,22 +3246,22 @@ static func _append_courtyard(obstacles: Array, origin: Vector2, bw: float, bh: 
 	return door_id
 
 
-## Thick walls, single door, denser interior props (high-value room).
+## Hardened room — slightly thicker walls, slit windows, single door.
 static func _append_bunker(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
-	var t := 40.0
+	var t := 22.0
 	var ox := origin.x
 	var oy := origin.y
-	_wall_rect(obstacles, ox, oy, bw, t, "bunker")
-	_wall_rect(obstacles, ox, oy + bh - t, bw, t, "bunker")
-	_wall_rect(obstacles, ox, oy + t, t, bh - t * 2.0, "bunker")
-	var door_h := 62.0
+	_wall_run_with_windows(obstacles, ox, oy, bw, t, "bunker")
+	_wall_run_with_windows(obstacles, ox, oy + bh - t, bw, t, "bunker")
+	_wall_run_with_windows(obstacles, ox, oy + t, t, bh - t * 2.0, "bunker")
+	var door_h := 52.0
 	var door_y := oy + (bh - door_h) * 0.5
 	var east_x := ox + bw - t
-	var top_h := maxf(18.0, door_y - (oy + t))
+	var top_h := maxf(14.0, door_y - (oy + t))
 	var bot_y := door_y + door_h
-	var bot_h := maxf(18.0, (oy + bh - t) - bot_y)
-	_wall_rect(obstacles, east_x, oy + t, t, top_h, "bunker")
-	_wall_rect(obstacles, east_x, bot_y, t, bot_h, "bunker")
+	var bot_h := maxf(14.0, (oy + bh - t) - bot_y)
+	_wall_run_with_windows(obstacles, east_x, oy + t, t, top_h, "bunker", top_h >= 60.0)
+	_wall_run_with_windows(obstacles, east_x, bot_y, t, bot_h, "bunker", bot_h >= 60.0)
 	_door_rect(obstacles, east_x, door_y, t, door_h, door_id)
 	# Dense interior — desks / racks.
 	obstacles.append({
@@ -2566,20 +3281,319 @@ static func _append_bunker(obstacles: Array, origin: Vector2, bw: float, bh: flo
 
 static func _append_cover_cluster(obstacles: Array, at: Vector2, count: int) -> void:
 	for i in count:
-		var w := randf_range(28.0, 52.0)
-		var h := randf_range(24.0, 48.0)
-		var ox := at.x + randf_range(-50.0, 50.0) - w * 0.5
-		var oy := at.y + randf_range(-40.0, 40.0) - h * 0.5
+		var w := randf_range(42.0, 74.0)
+		var h := randf_range(36.0, 68.0)
+		var ox := at.x + randf_range(-40.0, 40.0) - w * 0.5
+		var oy := at.y + randf_range(-32.0, 32.0) - h * 0.5
 		if ox < 40.0 or oy < 40.0 or ox + w > MAP_W - 40.0 or oy + h > MAP_H - 40.0:
-			continue
-		if ox < 700.0 and oy > MAP_H - 700.0:
 			continue
 		var style := "prop"
 		if i == 0:
-			style = "wall"
-			w = randf_range(50.0, 90.0)
-			h = 22.0
+			style = "sandbag"
+			if randf() < 0.55:
+				w = randf_range(70.0, 120.0)
+				h = 24.0
+			else:
+				w = 24.0
+				h = randf_range(70.0, 120.0)
+		elif i == 1 and randf() < 0.35:
+			style = "fence"
+			w = randf_range(80.0, 140.0)
+			h = 12.0
+		var foot := Rect2(ox, oy, w, h)
+		if _rect_hits_solids(foot, obstacles, 10.0):
+			continue
 		obstacles.append({"x": ox, "y": oy, "w": w, "h": h, "style": style, "kind": "solid"})
+
+
+## Stoop dust only — never dump rocks in the doorway lane.
+static func _append_door_apron(decals: Array, at: Vector2) -> void:
+	decals.append({
+		"x": at.x - 10.0, "y": at.y - 28.0, "w": 54.0, "h": 56.0,
+		"style": "gravel", "theme": "nature",
+	})
+	# Side litter only (above/below the lane), paint-only.
+	decals.append({
+		"x": at.x + 8.0, "y": at.y - 48.0, "w": 36.0, "h": 18.0,
+		"style": "dirt", "theme": "nature",
+	})
+	decals.append({
+		"x": at.x + 8.0, "y": at.y + 30.0, "w": 36.0, "h": 18.0,
+		"style": "dirt", "theme": "nature",
+	})
+
+
+static func _rect_hits_solids(foot: Rect2, obstacles: Array, pad: float = 8.0) -> bool:
+	var g := foot.grow(pad)
+	for o in obstacles:
+		var r := Rect2(float(o["x"]), float(o["y"]), float(o["w"]), float(o["h"]))
+		if g.intersects(r):
+			return true
+	return false
+
+
+static func _try_place_prop(obstacles: Array, at: Vector2, style: String, size: float, fringe: bool = false) -> bool:
+	var w := size
+	var h := size
+	var coll_r := size * 0.42
+	if style == "tree":
+		# Draw uses canopy bounds; collision is trunk-only.
+		coll_r = size * 0.16
+	elif style == "bush":
+		h = size * randf_range(0.7, 0.95)
+		coll_r = size * 0.34
+	elif style == "rock":
+		w = size * randf_range(0.85, 1.05)
+		h = w
+		coll_r = w * 0.4
+	elif style == "log":
+		w = size * randf_range(1.6, 2.2)
+		h = size * randf_range(0.35, 0.5)
+		coll_r = -1.0
+	var x := at.x - w * 0.5
+	var y := at.y - h * 0.5
+	if fringe:
+		# Skirt props may sit outside the playable rect; keep them inside the visual margin.
+		var lo := -MAP_MARGIN + 24.0
+		var hi_x := MAP_W + MAP_MARGIN - 24.0
+		var hi_y := MAP_H + MAP_MARGIN - 24.0
+		if x < lo or y < lo or x + w > hi_x or y + h > hi_y:
+			return false
+	else:
+		# Canopy may overhang the playable edge; keep trunks on the map.
+		var pad := -size * 0.35 if style in ["tree", "bush"] else 40.0
+		if x < pad or y < pad or x + w > MAP_W - pad or y + h > MAP_H - pad:
+			return false
+	var foot := Rect2(x, y, w, h)
+	if _rect_hits_solids(foot, obstacles, 14.0):
+		return false
+	var o := {
+		"x": x, "y": y, "w": w, "h": h,
+		"style": style,
+		"kind": "deco" if fringe else "solid",
+		"organic": style in ["tree", "bush", "rock"], "seed": randi(),
+	}
+	if fringe:
+		o["fringe"] = true
+	elif coll_r > 0.0:
+		o["coll_r"] = coll_r
+	obstacles.append(o)
+	return true
+
+
+## Strip clutter that landed in door approaches after scatter.
+static func _carve_door_clearance(obstacles: Array) -> void:
+	var zones: Array = []
+	for o in obstacles:
+		if String(o.get("kind", "")) != "door":
+			continue
+		var x := float(o["x"])
+		var y := float(o["y"])
+		var w := float(o["w"])
+		var h := float(o["h"])
+		# Tall thin doors open east/west; short wide doors open north/south.
+		if h >= w:
+			zones.append(Rect2(x - 48.0, y - 6.0, w + 96.0, h + 12.0))
+		else:
+			zones.append(Rect2(x - 6.0, y - 48.0, w + 12.0, h + 96.0))
+	if zones.is_empty():
+		return
+	var keep: Array = []
+	for o2 in obstacles:
+		var kind := String(o2.get("kind", ""))
+		if kind == "door" or kind == "window":
+			keep.append(o2)
+			continue
+		var style := String(o2.get("style", ""))
+		var is_build := style in ["shed", "warehouse", "courtyard", "bunker", "building", "column"]
+		if is_build:
+			keep.append(o2)
+			continue
+		var r := Rect2(float(o2["x"]), float(o2["y"]), float(o2["w"]), float(o2["h"]))
+		var blocked := false
+		for z in zones:
+			if (z as Rect2).intersects(r):
+				blocked = true
+				break
+		if not blocked:
+			keep.append(o2)
+	obstacles.clear()
+	for k in keep:
+		obstacles.append(k)
+
+
+## Grass / mud washes + trees, bushes, rocks, logs, ponds — densifies empty yards.
+static func _scatter_nature(
+	decals: Array,
+	obstacles: Array,
+	road_rects: Array,
+	building_rects: Array,
+	extract_sites: Array,
+	ingress: Vector2
+) -> void:
+	# Sparse ground patches away from compounds (cheap paint — not a full-map carpet).
+	for _i in 10:
+		var w := randf_range(90.0, 180.0)
+		var h := randf_range(70.0, 140.0)
+		var ox := randf_range(60.0, MAP_W - w - 60.0)
+		var oy := randf_range(60.0, MAP_H - h - 60.0)
+		var foot := Rect2(ox, oy, w, h)
+		if _rect_hits_reserved(foot.grow(48.0), road_rects, building_rects, extract_sites, ingress):
+			continue
+		var wash_styles: Array = ["grass", "mud", "leaf", "scrub"]
+		var style: String = wash_styles[randi() % wash_styles.size()]
+		_append_organic_wash(decals, foot.get_center(), w, h, style, "nature")
+
+	# Tree groves — spaced trunks, one leaf wash per grove (not per tree).
+	for _g in 6:
+		var gx := randf_range(200.0, MAP_W - 200.0)
+		var gy := randf_range(200.0, MAP_H - 200.0)
+		if _rect_hits_reserved(Rect2(gx - 40, gy - 40, 80, 80), road_rects, building_rects, extract_sites, ingress):
+			continue
+		_append_organic_wash(decals, Vector2(gx, gy), 180.0, 140.0, "leaf", "nature")
+		var placed_trees := 0
+		for _t in 5:
+			var ts := randf_range(54.0, 82.0)
+			var tx := gx + randf_range(-80.0, 80.0)
+			var ty := gy + randf_range(-60.0, 60.0)
+			if _rect_hits_reserved(Rect2(tx - ts * 0.5, ty - ts * 0.5, ts, ts).grow(12.0), road_rects, building_rects, extract_sites, ingress):
+				continue
+			if _try_place_prop(obstacles, Vector2(tx, ty), "tree", ts):
+				placed_trees += 1
+			if placed_trees >= 3:
+				break
+
+	# Ponds — organic water bodies, keep clear of roads.
+	for _p in 2 + randi() % 2:
+		var pw := randf_range(120.0, 220.0)
+		var ph := randf_range(90.0, 180.0)
+		var px := randf_range(120.0, MAP_W - pw - 120.0)
+		var py := randf_range(120.0, MAP_H - ph - 120.0)
+		var pf := Rect2(px, py, pw, ph)
+		if _rect_hits_reserved(pf.grow(40.0), road_rects, building_rects, extract_sites, ingress):
+			continue
+		_append_organic_wash(decals, pf.get_center(), pw, ph, "pond", "nature")
+		for _r in 3:
+			var ang := randf() * TAU
+			var rp := pf.get_center() + Vector2(cos(ang) * pw * 0.48, sin(ang) * ph * 0.48)
+			_try_place_prop(obstacles, rp, "bush", randf_range(18.0, 28.0))
+
+	# Loose field flora — must clear existing solids (no rock-on-tree stacks).
+	for _t in 28:
+		var flora: Array = ["tree", "tree", "bush", "rock", "log"]
+		var kind: String = flora[randi() % flora.size()]
+		var size := randf_range(40.0, 70.0)
+		match kind:
+			"tree":
+				size = randf_range(56.0, 86.0)
+			"bush":
+				size = randf_range(40.0, 64.0)
+			"rock":
+				size = randf_range(22.0, 34.0)
+			"log":
+				size = randf_range(70.0, 110.0)
+		var at := Vector2(randf_range(100.0, MAP_W - 100.0), randf_range(100.0, MAP_H - 100.0))
+		var probe := Rect2(at.x - size * 0.5, at.y - size * 0.5, size, size)
+		if _rect_hits_reserved(probe.grow(18.0), road_rects, building_rects, extract_sites, ingress):
+			continue
+		_try_place_prop(obstacles, at, kind, size)
+
+	# Shipping-container style long props for industrial districts.
+	for _c in 6:
+		var cw := randf_range(140.0, 220.0)
+		var ch := randf_range(48.0, 70.0)
+		if randf() < 0.4:
+			var tmp := cw
+			cw = ch
+			ch = tmp
+		var cx := randf_range(100.0, MAP_W - cw - 100.0)
+		var cy := randf_range(100.0, MAP_H - ch - 100.0)
+		var cf := Rect2(cx, cy, cw, ch)
+		if _rect_hits_reserved(cf.grow(20.0), road_rects, building_rects, extract_sites, ingress):
+			continue
+		if _rect_hits_solids(cf, obstacles, 12.0):
+			continue
+		obstacles.append({"x": cx, "y": cy, "w": cw, "h": ch, "style": "container", "kind": "solid"})
+
+	# Map-edge tree belt — soft compound border like the forest ref.
+	_scatter_edge_trees(obstacles, road_rects, building_rects, extract_sites, ingress)
+
+
+static func _scatter_edge_trees(
+	obstacles: Array,
+	road_rects: Array,
+	building_rects: Array,
+	extract_sites: Array,
+	ingress: Vector2
+) -> void:
+	# Outer forest skirt — paint-only, past the playable cutoff so the map doesn't hard-stop.
+	for _i in 72:
+		var edge := randi() % 4
+		var ts := randf_range(58.0, 92.0)
+		var tx: float
+		var ty: float
+		match edge:
+			0: # north skirt
+				tx = randf_range(-MAP_MARGIN + 40.0, MAP_W + MAP_MARGIN - ts - 40.0)
+				ty = randf_range(-MAP_MARGIN + 20.0, -20.0)
+			1: # south skirt
+				tx = randf_range(-MAP_MARGIN + 40.0, MAP_W + MAP_MARGIN - ts - 40.0)
+				ty = randf_range(MAP_H + 8.0, MAP_H + MAP_MARGIN - ts - 20.0)
+			2: # west skirt
+				tx = randf_range(-MAP_MARGIN + 20.0, -20.0)
+				ty = randf_range(-MAP_MARGIN + 40.0, MAP_H + MAP_MARGIN - ts - 40.0)
+			_: # east skirt
+				tx = randf_range(MAP_W + 8.0, MAP_W + MAP_MARGIN - ts - 20.0)
+				ty = randf_range(-MAP_MARGIN + 40.0, MAP_H + MAP_MARGIN - ts - 40.0)
+		_try_place_prop(obstacles, Vector2(tx + ts * 0.5, ty + ts * 0.5), "tree" if randf() < 0.75 else "bush", ts, true)
+
+	# Inner verge — denser belt just inside the playable edge (canopies may overhang).
+	var belt := 180.0
+	for _i in 56:
+		var edge2 := randi() % 4
+		var ts2 := randf_range(52.0, 86.0)
+		var tx2: float
+		var ty2: float
+		match edge2:
+			0:
+				tx2 = randf_range(20.0, MAP_W - ts2 - 20.0)
+				ty2 = randf_range(-ts2 * 0.25, belt)
+			1:
+				tx2 = randf_range(20.0, MAP_W - ts2 - 20.0)
+				ty2 = randf_range(MAP_H - belt - ts2 * 0.5, MAP_H - ts2 * 0.35)
+			2:
+				tx2 = randf_range(-ts2 * 0.25, belt)
+				ty2 = randf_range(20.0, MAP_H - ts2 - 20.0)
+			_:
+				tx2 = randf_range(MAP_W - belt - ts2 * 0.5, MAP_W - ts2 * 0.35)
+				ty2 = randf_range(20.0, MAP_H - ts2 - 20.0)
+		var at := Vector2(tx2 + ts2 * 0.5, ty2 + ts2 * 0.5)
+		if _rect_hits_reserved(Rect2(tx2, ty2, ts2, ts2).grow(8.0), road_rects, building_rects, extract_sites, ingress):
+			continue
+		_try_place_prop(obstacles, at, "tree", ts2)
+
+	# Corner thickets — edge-only scatter leaves corners thin and cut-off looking.
+	var corners: Array = [
+		Vector2(-MAP_MARGIN * 0.45, -MAP_MARGIN * 0.45),
+		Vector2(MAP_W + MAP_MARGIN * 0.45, -MAP_MARGIN * 0.45),
+		Vector2(-MAP_MARGIN * 0.45, MAP_H + MAP_MARGIN * 0.45),
+		Vector2(MAP_W + MAP_MARGIN * 0.45, MAP_H + MAP_MARGIN * 0.45),
+	]
+	for corner in corners:
+		for _c in 10:
+			var ts3 := randf_range(60.0, 96.0)
+			var jitter := Vector2(randf_range(-110.0, 110.0), randf_range(-110.0, 110.0))
+			_try_place_prop(obstacles, corner + jitter, "tree" if randf() < 0.7 else "bush", ts3, true)
+
+
+static func _obstacle_blocks(o: Dictionary) -> bool:
+	# Open doors are passable slabs — still drawn, no collision.
+	if String(o.get("kind", "")) == "door" and bool(o.get("open", false)):
+		return false
+	# Fringe forest is visual-only (outside / overhanging the playable rect).
+	if String(o.get("kind", "")) == "deco" or bool(o.get("fringe", false)):
+		return false
+	return true
 
 
 ## Remove solids that overlap a clear disk (ingress / extract pads).
@@ -2587,6 +3601,9 @@ static func _carve_clear_disk(obstacles: Array, center: Vector2, radius: float) 
 	var keep: Array = []
 	for o in obstacles:
 		if String(o.get("kind", "")) == "door":
+			keep.append(o)
+			continue
+		if String(o.get("kind", "")) == "deco" or bool(o.get("fringe", false)):
 			keep.append(o)
 			continue
 		var r := Rect2(float(o["x"]), float(o["y"]), float(o["w"]), float(o["h"]))
@@ -2611,11 +3628,18 @@ static func _rand_near(obstacles: Array, anchor: Vector2, radius: float, body_r:
 	return _rand_clear_pos(obstacles, body_r, 60.0)
 
 
-static func _obstacle_blocks(o: Dictionary) -> bool:
-	# Open doors are passable slabs — still drawn, no collision/LOS.
-	if String(o.get("kind", "")) == "door" and bool(o.get("open", false)):
+static func _obstacle_blocks_los(o: Dictionary) -> bool:
+	# Glass (intact or broken) never blocks sight — only walls / shut doors do.
+	if String(o.get("kind", "")) == "window":
 		return false
-	return true
+	return _obstacle_blocks(o)
+
+
+static func _obstacle_blocks_reach(o: Dictionary) -> bool:
+	# Window frames always block looting/reaching, even after the pane breaks.
+	if String(o.get("kind", "")) == "window":
+		return true
+	return _obstacle_blocks(o)
 
 
 static func _rand_clear_pos(obstacles: Array, radius: float, margin: float) -> Vector2:
@@ -2645,13 +3669,13 @@ static func _make_actor(world: Dictionary, kind: String, pos: Vector2, extras: D
 		"melee_root_pos": pos,
 		"hp": float(extras.get("hp", 100.0)),
 		"max_hp": float(extras.get("max_hp", 100.0)),
-		"radius": float(extras.get("radius", 14.0)),
+		"radius": float(extras.get("radius", ACTOR_RADIUS)),
 		"facing": 0.0,
 		"alive": true,
 		"fire_cooldown": 0.0,
 		"aim": Vector2.RIGHT,
 		"aggro_range": float(extras.get("aggro_range", 220.0)),
-		"speed": float(extras.get("speed", 140.0)),
+		"speed": float(extras.get("speed", 90.0)),
 		"damage": float(extras.get("damage", 10.0)),
 		"mitigation": float(extras.get("mitigation", 0.0)),
 		"hit_flash": 0.0,
@@ -2659,9 +3683,89 @@ static func _make_actor(world: Dictionary, kind: String, pos: Vector2, extras: D
 	}
 
 
+## Topmost floor decal under a point (roads beat washes).
+
+# =============================================================================
+# FLOOR / COLLISION / ACTOR HELPERS
+# =============================================================================
+static func _floor_at(world: Dictionary, pos: Vector2) -> String:
+	var best := "dirt"
+	var best_rank := -1
+	var decals: Array = world.get("decals", [])
+	var index: Dictionary = world.get("draw_chunks", {})
+	var probe: Array = []
+	if _spatial_index_matches(index, -1, decals.size()):
+		var cells: Dictionary = index.get("cells", {})
+		var cs := float(index.get("size", SPATIAL_CHUNK))
+		var key := "%d:%d" % [int(floor(pos.x / cs)), int(floor(pos.y / cs))]
+		var cell: Variant = cells.get(key, null)
+		if cell != null:
+			for di in cell["d"]:
+				if di >= 0 and di < decals.size():
+					probe.append(decals[di])
+	else:
+		probe = decals
+	for d in probe:
+		var style := String(d.get("style", ""))
+		var rank := _floor_rank(style)
+		if rank < 0:
+			continue
+		var r := Rect2(float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"]))
+		if not r.has_point(pos):
+			continue
+		if rank >= best_rank:
+			best_rank = rank
+			best = style
+	return best
+
+
+static func _floor_rank(style: String) -> int:
+	match style:
+		"road", "junction":
+			return 50
+		"dirt_road":
+			return 45
+		"interior":
+			return 42
+		"pad", "asphalt":
+			return 40
+		"gravel":
+			return 30
+		"pond":
+			return 25
+		"grass", "leaf", "scrub", "mud", "yard", "dirt":
+			return 10
+		_:
+			return -1
+
+
+static func _floor_mods(style: String) -> Dictionary:
+	if FLOOR_MODS.has(style):
+		return FLOOR_MODS[style]
+	return {"speed": 1.0, "hear": 1.0, "vision": 1.0}
+
+
+static func _obstacle_center(o: Dictionary) -> Vector2:
+	return Vector2(float(o["x"]) + float(o["w"]) * 0.5, float(o["y"]) + float(o["h"]) * 0.5)
+
+
+static func _point_hits_obstacle(p: Vector2, o: Dictionary) -> bool:
+	var coll_r := float(o.get("coll_r", -1.0))
+	if coll_r > 0.0:
+		return p.distance_squared_to(_obstacle_center(o)) <= coll_r * coll_r
+	return p.x >= float(o["x"]) and p.x <= float(o["x"]) + float(o["w"]) \
+		and p.y >= float(o["y"]) and p.y <= float(o["y"]) + float(o["h"])
+
+
 static func _place_away_from(obstacles: Array, x: float, y: float, r: float) -> bool:
+	var p := Vector2(x, y)
 	for o in obstacles:
 		if not _obstacle_blocks(o):
+			continue
+		var coll_r := float(o.get("coll_r", -1.0))
+		if coll_r > 0.0:
+			if p.distance_squared_to(_obstacle_center(o)) <= (coll_r + r) * (coll_r + r):
+				return false
 			continue
 		var cx := clampf(x, float(o["x"]), float(o["x"]) + float(o["w"]))
 		var cy := clampf(y, float(o["y"]), float(o["y"]) + float(o["h"]))
@@ -2671,30 +3775,42 @@ static func _place_away_from(obstacles: Array, x: float, y: float, r: float) -> 
 
 
 static func _resolve_circle_rect(pos: Vector2, radius: float, o: Dictionary) -> Vector2:
-	var nearest := Vector2(
-		clampf(pos.x, float(o["x"]), float(o["x"]) + float(o["w"])),
-		clampf(pos.y, float(o["y"]), float(o["y"]) + float(o["h"]))
-	)
-	var delta := pos - nearest
-	var d2 := delta.length_squared()
-	if d2 >= radius * radius or d2 < 1e-8:
-		if pos.x > float(o["x"]) and pos.x < float(o["x"]) + float(o["w"]) \
-				and pos.y > float(o["y"]) and pos.y < float(o["y"]) + float(o["h"]):
-			var left := pos.x - float(o["x"])
-			var right := float(o["x"]) + float(o["w"]) - pos.x
-			var top := pos.y - float(o["y"])
-			var bottom := float(o["y"]) + float(o["h"]) - pos.y
-			var m := mini(mini(left, right), mini(top, bottom))
-			if m == left:
-				return Vector2(float(o["x"]) - radius, pos.y)
-			if m == right:
-				return Vector2(float(o["x"]) + float(o["w"]) + radius, pos.y)
-			if m == top:
-				return Vector2(pos.x, float(o["y"]) - radius)
-			return Vector2(pos.x, float(o["y"]) + float(o["h"]) + radius)
+	var coll_r := float(o.get("coll_r", -1.0))
+	if coll_r > 0.0:
+		var c := _obstacle_center(o)
+		var min_d := coll_r + radius
+		var delta := pos - c
+		var d := delta.length()
+		if d < 1e-5:
+			return c + Vector2(min_d, 0.0)
+		if d >= min_d:
+			return pos
+		return c + delta * (min_d / d)
+	var ox := float(o["x"])
+	var oy := float(o["y"])
+	var ow := float(o["w"])
+	var oh := float(o["h"])
+	var nearest := Vector2(clampf(pos.x, ox, ox + ow), clampf(pos.y, oy, oy + oh))
+	var delta2 := pos - nearest
+	var d2 := delta2.length_squared()
+	var buried := pos.x >= ox and pos.x <= ox + ow and pos.y >= oy and pos.y <= oy + oh
+	# Buried or glued to the surface — face-eject (avoids radius/d explosions).
+	if buried or d2 < 1e-6:
+		var left := pos.x - ox if buried else absf(pos.x - ox)
+		var right := ox + ow - pos.x if buried else absf(pos.x - (ox + ow))
+		var top := pos.y - oy if buried else absf(pos.y - oy)
+		var bottom := oy + oh - pos.y if buried else absf(pos.y - (oy + oh))
+		var m := mini(mini(left, right), mini(top, bottom))
+		if m == left:
+			return Vector2(ox - radius, pos.y)
+		if m == right:
+			return Vector2(ox + ow + radius, pos.y)
+		if m == top:
+			return Vector2(pos.x, oy - radius)
+		return Vector2(pos.x, oy + oh + radius)
+	if d2 >= radius * radius:
 		return pos
-	var d := sqrt(d2)
-	return nearest + delta * (radius / d)
+	return nearest + delta2 * (radius / sqrt(d2))
 
 
 static func _collide_actor_obstacles(actor: Dictionary, obstacles: Array) -> void:
@@ -2704,12 +3820,35 @@ static func _collide_actor_obstacles(actor: Dictionary, obstacles: Array) -> voi
 		actor["pos"] = _resolve_circle_rect(actor["pos"], float(actor["radius"]), o)
 
 
+## Substep move so thin walls / windows can't be tunneled on a long frame.
+static func _move_actor(actor: Dictionary, delta: Vector2, obstacles: Array) -> void:
+	var dist := delta.length()
+	if dist < 1e-6:
+		return
+	var steps := maxi(1, int(ceil(dist / 6.0)))
+	var step := delta / float(steps)
+	for _i in steps:
+		actor["pos"] = actor["pos"] + step
+		_collide_actor_obstacles(actor, obstacles)
+
+
+## Sweep from a prior position after free AI writes (roamers).
+static func _move_collide_from(actor: Dictionary, prev: Vector2, obstacles: Array) -> void:
+	var delta: Vector2 = actor["pos"] - prev
+	actor["pos"] = prev
+	_move_actor(actor, delta, obstacles)
+
+
 static func _clamp_to_map(actor: Dictionary, w: float, h: float) -> void:
 	var r := float(actor["radius"])
 	var p: Vector2 = actor["pos"]
 	actor["pos"] = Vector2(clampf(p.x, r, w - r), clampf(p.y, r, h - r))
 
 
+
+# =============================================================================
+# PROJECTILES / EXTRACTS / BLEED / BLOOD
+# =============================================================================
 static func _spawn_bullet(world: Dictionary, from: Dictionary, aim: Vector2, from_player: bool, speed: float) -> void:
 	# Hard gate — unarmed players never spawn projectiles (even if a caller slips).
 	if from_player and not Items.loadout_has_weapon(world.get("loadout", {})):
@@ -2724,7 +3863,7 @@ static func _spawn_bullet(world: Dictionary, from: Dictionary, aim: Vector2, fro
 		"damage": float(from["damage"]),
 		"life": 1.6,
 		"from_player": from_player,
-		"radius": 3.5,
+		"radius": 2.15,
 		"origin": from["pos"],
 	})
 
@@ -2760,13 +3899,17 @@ static func _tick_raid_dusk(world: Dictionary) -> void:
 			vision *= ADRENALINE_VISION_MULT
 		else:
 			vision *= WOUNDED_VISION_MULT
+	# Brush / dusk / mud thin sight; open asphalt keeps it a hair wider.
+	var floor_v := _floor_at(world, player["pos"])
+	player["floor"] = floor_v
+	vision *= float(_floor_mods(floor_v)["vision"])
 	player["vision_range"] = vision
 	# Roamers hear a bit farther as the compound quiets — pressure without new HUD chrome.
 	var hear_boost := lerpf(1.0, DUSK_HEAR_MAX, dusk)
 	world["dusk_hear_mult"] = hear_boost
 	if dusk > 0.02 and not bool(world.get("dusk_warned", false)):
 		world["dusk_warned"] = true
-		_set_message(world, "Light failing — vision thinning. Push for a lift.", 3.2)
+		# No top banner — dusk already shows via wash + thinner fog.
 
 
 static func _effective_extract_alarm(world: Dictionary, zone: Dictionary) -> float:
@@ -2856,7 +3999,11 @@ static func _refresh_interact_hint(world: Dictionary) -> void:
 		if bool(c["opened"]):
 			continue
 		var d: float = player["pos"].distance_to(c["pos"])
-		if d <= float(c["radius"]) + float(player["radius"]) + 18.0 and d < best:
+		if d > float(c["radius"]) + float(player["radius"]) + 18.0:
+			continue
+		if not has_clear_reach(player["pos"], c["pos"], world["obstacles"], world.get("draw_chunks", {})):
+			continue
+		if d < best:
 			best = d
 			nearest = c
 			nearest_kind = String(c.get("kind", "crate"))
@@ -2879,7 +4026,12 @@ static func _refresh_interact_hint(world: Dictionary) -> void:
 		return
 	var door = _find_door_target(world)
 	if door != null:
-		world["interact_hint"] = "E  open" if not bool(door.get("open", false)) else "E  shut"
+		if not bool(door.get("open", false)):
+			world["interact_hint"] = "E  open"
+		elif _actor_overlaps_door(player, door):
+			world["interact_hint"] = "step clear"
+		else:
+			world["interact_hint"] = "E  shut"
 		return
 	world["interact_hint"] = null
 	if Items.has_better_gear_in_inventory(world["loadout"], world["inventory"]):
@@ -2911,11 +4063,31 @@ static func _refresh_interact_hint(world: Dictionary) -> void:
 
 static func _bullet_hits_obstacle(p: Vector2, obstacles: Array) -> bool:
 	for o in obstacles:
+		if String(o.get("kind", "")) == "window":
+			# Broken panes no longer stop rounds; intact glass is handled in the step loop.
+			if bool(o.get("broken", false)):
+				continue
+			if _point_hits_obstacle(p, o):
+				return true
+			continue
 		if not _obstacle_blocks(o):
 			continue
-		if p.x >= float(o["x"]) and p.x <= float(o["x"]) + float(o["w"]) \
-				and p.y >= float(o["y"]) and p.y <= float(o["y"]) + float(o["h"]):
+		if _point_hits_obstacle(p, o):
 			return true
+	return false
+
+
+## Shatter an intact window under a bullet sample. Returns true if glass broke this step.
+static func _try_break_window_at(world: Dictionary, p: Vector2) -> bool:
+	for o in world["obstacles"]:
+		if String(o.get("kind", "")) != "window" or bool(o.get("broken", false)):
+			continue
+		if not _point_hits_obstacle(p, o):
+			continue
+		o["broken"] = true
+		var center := _obstacle_center(o)
+		_emit_noise(world, center, 140.0, 0.35)
+		return true
 	return false
 
 
@@ -2964,7 +4136,10 @@ static func _update_bullets(world: Dictionary, dt: float) -> void:
 			if p.x < 0.0 or p.y < 0.0 or p.x > map_w or p.y > map_h:
 				consumed = true
 				break
-			if _bullet_hits_obstacle(p, world["obstacles"]):
+			# Intact glass shatters and the round keeps going; walls/doors still eat it.
+			if _try_break_window_at(world, p):
+				pass
+			elif _bullet_hits_obstacle(p, world["obstacles"]):
 				consumed = true
 				break
 
@@ -2986,7 +4161,6 @@ static func _update_bullets(world: Dictionary, dt: float) -> void:
 						roamer["hp"] = float(roamer["hp"]) - dmg
 						roamer["hit_flash"] = 0.12
 						RaidRoamers.apply_suppression(roamer, ROAMER_SUPPRESS_HIT_GAP, ROAMER_SUPPRESS_TTL * 1.15)
-						_push_float(world, roamer["pos"], "-%d" % int(ceil(dmg)), Color("ffd0d0"), 0.55)
 						if float(roamer["hp"]) <= 0.0:
 							_kill_roamer_from_bullet(world, roamer)
 						hit = true
@@ -3012,12 +4186,11 @@ static func _update_bullets(world: Dictionary, dt: float) -> void:
 					var pdmg := incoming - absorbed
 					pl["hp"] = float(pl["hp"]) - pdmg
 					pl["hit_flash"] = 0.15
-					world["shake"] = maxf(float(world["shake"]), 6.0)
+					world["shake"] = maxf(float(world["shake"]), 2.4)
 					_apply_suppression(world, pl, SUPPRESS_HIT_BLOOM, 0.75)
 					_mark_threat_bearing(world, b.get("origin", p))
 					# Hits break a settled plant — reacquire before the cone tightens again.
 					pl["brace_hold"] = 0.0
-					_push_float(world, pl["pos"], "-%d" % int(ceil(pdmg)), Color("e85454"), 0.7)
 					_wear_armor(world, absorbed, base_mit)
 					_interrupt_medkit(world, "Medkit interrupted — took fire.")
 					_interrupt_reload(world)
@@ -3035,7 +4208,7 @@ static func _update_bullets(world: Dictionary, dt: float) -> void:
 						pl["hp"] = 0.0
 						world["over"] = true
 						world["outcome"] = "died"
-						world["shake"] = 14.0
+						world["shake"] = 5.5
 						_spawn_player_drop_bag(world)
 						var lost := Items.inventory_used(world.get("dropped_loot", []))
 						_set_message(world, "KIA — drop bag left behind (%d items). Stash is safe." % lost, 6.0)
@@ -3195,10 +4368,11 @@ static func _spawn_extract_reinforcements(world: Dictionary, zone: Dictionary, c
 		world["roamers"].append(_make_actor(world, "roamer", sp, {
 			"hp": randf_range(50.0, 75.0),
 			"max_hp": 75.0,
-			"speed": randf_range(120.0, 155.0),
+			"speed": randf_range(88.0, 108.0),
 			"damage": randf_range(10.0, 16.0),
 			"aggro_range": randf_range(280.0, 360.0),
 			"mitigation": 0.08,
+			"radius": ROAMER_RADIUS,
 		}))
 		var r: Dictionary = world["roamers"].back()
 		r["alert_ttl"] = 4.0
@@ -3206,6 +4380,7 @@ static func _spawn_extract_reinforcements(world: Dictionary, zone: Dictionary, c
 		r["last_seen"] = world["player"]["pos"]
 		r["ai_state"] = "rush"
 		r["patrol_anchor"] = zp
+		r["patrol_waypoint"] = Vector2.ZERO
 		r["patrol_phase"] = randf() * TAU
 		r["search_ttl"] = 0.0
 		r["elite"] = false
@@ -3261,7 +4436,7 @@ static func _tick_bleed(world: Dictionary, dt: float) -> void:
 	player["hp"] = 0.0
 	world["over"] = true
 	world["outcome"] = "died"
-	world["shake"] = 14.0
+	world["shake"] = 5.5
 	_spawn_player_drop_bag(world)
 	var lost := Items.inventory_used(world.get("dropped_loot", []))
 	_set_message(world, "Bled out — drop bag left behind (%d items). Stash is safe." % lost, 6.0)

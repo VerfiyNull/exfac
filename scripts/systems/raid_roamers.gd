@@ -1,8 +1,11 @@
 class_name RaidRoamers
 extends RefCounted
-## Roamer / enforcer field AI â€” RaidSim owns world helpers; this owns contact brains.
+## Roamer / enforcer field AI. RaidSim owns world helpers; this owns contact brains.
+##
+## Layout:
+##   Mirrored tunables → AI tunables → Host bridge → Tick → States → Calls
 
-# Runtime load â€” avoids circular preload with raid.gd.
+# Runtime load — avoids circular preload with raid.gd.
 static var _host: GDScript
 
 
@@ -12,45 +15,20 @@ static func _R() -> GDScript:
 	return _host
 
 
-## Keep in sync with RaidSim â€” duplicated so AI consts stay typed without host lookups.
-const EXTRACT_ALARM_RADIUS := 1400.0
+# =============================================================================
+# MIRRORED RaidSim TUNABLES — keep values identical to raid.gd
+# (Duplicated so AI consts stay typed without host lookups.)
+# =============================================================================
+const EXTRACT_ALARM_RADIUS := 1600.0
 const HEAR_SPRINT_RANGE := 240.0
 const MELEE_SLOW_MULT := 0.4
 const ROAMER_SUPPRESS_SPREAD := 0.14
 
 
-static func _host_extract_alarm(world: Dictionary, zone: Dictionary) -> float:
-	return float(_R().call("_effective_extract_alarm", world, zone))
-
-
-static func _host_has_los(from: Vector2, to: Vector2, obstacles: Array) -> bool:
-	return bool(_R().call("has_line_of_sight", from, to, obstacles))
-
-
-static func _host_collide(actor: Dictionary, obstacles: Array) -> void:
-	_R().call("_collide_actor_obstacles", actor, obstacles)
-
-
-static func _host_clamp(actor: Dictionary, w: float, h: float) -> void:
-	_R().call("_clamp_to_map", actor, w, h)
-
-
-static func _host_spawn_bullet(world: Dictionary, from: Dictionary, aim: Vector2, from_player: bool, speed: float) -> void:
-	_R().call("_spawn_bullet", world, from, aim, from_player, speed)
-
-
-static func _host_push_float(world: Dictionary, pos: Vector2, text: String, color: Color, life: float = 1.1) -> void:
-	_R().call("_push_float", world, pos, text, color, life)
-
-
-static func _host_set_message(world: Dictionary, msg: String, ttl: float = 2.5) -> void:
-	_R().call("_set_message", world, msg, ttl)
-
-
-static func _host_emit_noise(world: Dictionary, pos: Vector2, radius: float, ttl: float) -> void:
-	_R().call("_emit_noise", world, pos, radius, ttl)
-
-## Roamer AI — explicit states so hearing / LOS / extract rush don't fight each other.
+# =============================================================================
+# AI-OWNED TUNABLES
+# =============================================================================
+## Explicit states so hearing / LOS / extract rush don't fight each other.
 const ROAMER_SEARCH_TTL := 3.2
 const ROAMER_COMBAT_HOLD_RANGE := 95.0
 const ROAMER_COMBAT_BACK_RANGE := 62.0
@@ -75,14 +53,60 @@ const ENFORCER_DISTRESS_RANGE := 780.0
 ## Blood scent pull range (trail itself still owned by RaidSim).
 const BLOOD_SCENT_RANGE := 160.0
 
+
+# =============================================================================
+# HOST BRIDGE — thin wrappers into RaidSim helpers
+# =============================================================================
+static func _host_extract_alarm(world: Dictionary, zone: Dictionary) -> float:
+	return float(_R().call("_effective_extract_alarm", world, zone))
+
+
+static func _host_has_los(from: Vector2, to: Vector2, obstacles: Array, index: Dictionary = {}) -> bool:
+	return bool(_R().call("has_line_of_sight", from, to, obstacles, index))
+
+
+static func _host_collide(actor: Dictionary, obstacles: Array) -> void:
+	_R().call("_collide_actor_obstacles", actor, obstacles)
+
+
+static func _host_move_collide_from(actor: Dictionary, prev: Vector2, obstacles: Array) -> void:
+	_R().call("_move_collide_from", actor, prev, obstacles)
+
+
+static func _host_clamp(actor: Dictionary, w: float, h: float) -> void:
+	_R().call("_clamp_to_map", actor, w, h)
+
+
+static func _host_spawn_bullet(world: Dictionary, from: Dictionary, aim: Vector2, from_player: bool, speed: float) -> void:
+	_R().call("_spawn_bullet", world, from, aim, from_player, speed)
+
+
+static func _host_push_float(world: Dictionary, pos: Vector2, text: String, color: Color, life: float = 1.1) -> void:
+	_R().call("_push_float", world, pos, text, color, life)
+
+
+static func _host_set_message(world: Dictionary, msg: String, ttl: float = 2.5) -> void:
+	_R().call("_set_message", world, msg, ttl)
+
+
+static func _host_emit_noise(world: Dictionary, pos: Vector2, radius: float, ttl: float) -> void:
+	_R().call("_emit_noise", world, pos, radius, ttl)
+
+
+# =============================================================================
+# TICK
+# =============================================================================
 static func update(world: Dictionary, dt: float) -> void:
 	var player: Dictionary = world["player"]
 	var alarm := bool(world.get("extract_alarm", false))
 	var extract_pos := Vector2.ZERO
+	var active_alarm_radius: float = EXTRACT_ALARM_RADIUS
 	if alarm:
+		# One pass — resolve pad position + effective alarm radius together.
 		for z in world["extracts"]:
 			if int(z["id"]) == int(world.get("active_extract_id", -1)):
 				extract_pos = z["pos"]
+				active_alarm_radius = _host_extract_alarm(world, z)
 				break
 
 	var noise_ttl := float(world.get("noise_ttl", 0.0))
@@ -90,12 +114,6 @@ static func update(world: Dictionary, dt: float) -> void:
 	var noise_pos: Vector2 = world.get("noise_pos", Vector2.ZERO)
 
 	var contest_count := 0
-	var active_alarm_radius: float = EXTRACT_ALARM_RADIUS
-	if alarm:
-		for z in world["extracts"]:
-			if int(z["id"]) == int(world.get("active_extract_id", -1)):
-				active_alarm_radius = _host_extract_alarm(world, z)
-				break
 	for roamer in world["roamers"]:
 		roamer["hit_flash"] = maxf(0.0, float(roamer["hit_flash"]) - dt)
 		roamer["alert_ttl"] = maxf(0.0, float(roamer.get("alert_ttl", 0.0)) - dt)
@@ -103,6 +121,7 @@ static func update(world: Dictionary, dt: float) -> void:
 		roamer["call_cooldown"] = maxf(0.0, float(roamer.get("call_cooldown", 0.0)) - dt)
 		roamer["suppress_ttl"] = maxf(0.0, float(roamer.get("suppress_ttl", 0.0)) - dt)
 		roamer["telegraph_ttl"] = maxf(0.0, float(roamer.get("telegraph_ttl", 0.0)) - dt)
+		roamer["door_cooldown"] = maxf(0.0, float(roamer.get("door_cooldown", 0.0)) - dt)
 		if not bool(roamer["alive"]):
 			continue
 		# Re-assert root before AI — any leftover slide from last frame is undone.
@@ -112,7 +131,18 @@ static func update(world: Dictionary, dt: float) -> void:
 		var to_player: Vector2 = player["pos"] - roamer["pos"]
 		var d := to_player.length()
 		var sees_player: bool = bool(player["alive"]) and d < float(roamer["aggro_range"]) \
-				and _host_has_los(roamer["pos"], player["pos"], world["obstacles"])
+				and _host_has_los(roamer["pos"], player["pos"], world["obstacles"], world.get("draw_chunks", {}))
+		# PZ-style ~90° vision cone while idle — alerted AI already tracks you.
+		if sees_player:
+			var st_see := String(roamer.get("ai_state", "patrol"))
+			var alerted := st_see in ["combat", "rush", "retreat", "flank", "investigate"] \
+				or float(roamer.get("alert_ttl", 0.0)) > 0.0
+			if not alerted:
+				var raim: Vector2 = roamer.get("aim", Vector2.RIGHT)
+				if raim.length_squared() > 1e-6 and d > 1e-6:
+					# cos(45°) — outside the forward cone is invisible until they hear you.
+					if raim.normalized().dot(to_player / d) < 0.7071:
+						sees_player = false
 
 		# Hearing: gunshots / sprint pull roamers even through walls.
 		var hears := false
@@ -167,6 +197,9 @@ static func update(world: Dictionary, dt: float) -> void:
 				_tick_melee_slow(roamer, dt)
 				continue
 
+		# Snapshot before AI writes — collision sweeps from here so walls can't be skipped.
+		var pre_pos: Vector2 = roamer["pos"]
+
 		# Extract rush overrides local AI — radius depends on the exit's pressure profile.
 		var rushing := false
 		if near_extract_rush:
@@ -211,7 +244,10 @@ static func update(world: Dictionary, dt: float) -> void:
 				_:
 					_do_patrol(world, roamer, dt)
 
-		_host_collide(roamer, world["obstacles"])
+		# Pry a closed door in the walk path — deliberate open, not sprint auto-bash.
+		_try_open_blocking_door(world, roamer)
+		# Sweep from pre-AI pos — thin walls/windows can't be tunneled on long steps.
+		_host_move_collide_from(roamer, pre_pos, world["obstacles"])
 		_host_clamp(roamer, float(world["width"]), float(world["height"]))
 		# Hard pin while punch-rooted — AI/collision must not slide them away.
 		if _melee_rooted(roamer) and roamer.has("melee_root_pos"):
@@ -219,6 +255,39 @@ static func update(world: Dictionary, dt: float) -> void:
 		# Expire slow after the pin so the last rooted frame isn't a surprise backpedal.
 		_tick_melee_slow(roamer, dt)
 	world["extract_contest_count"] = contest_count
+
+
+
+# =============================================================================
+# MOVEMENT / DOORS
+# =============================================================================
+static func _try_open_blocking_door(world: Dictionary, roamer: Dictionary) -> void:
+	if float(roamer.get("door_cooldown", 0.0)) > 0.0:
+		return
+	if _melee_rooted(roamer):
+		return
+	var aim: Vector2 = roamer.get("aim", Vector2.ZERO)
+	if aim.length_squared() < 1e-6:
+		return
+	var ahead: Vector2 = roamer["pos"] + aim.normalized() * (float(roamer.get("radius", 10.0)) + 12.0)
+	var nearest: Variant = null
+	var best := INF
+	for o in world.get("obstacles", []):
+		if String(o.get("kind", "")) != "door" or bool(o.get("open", false)):
+			continue
+		var r := Rect2(float(o["x"]), float(o["y"]), float(o["w"]), float(o["h"])).grow(4.0)
+		# Only pry when the walk probe hits the slab — standing nearby is not enough.
+		if not r.has_point(ahead):
+			continue
+		var center := Vector2(float(o["x"]) + float(o["w"]) * 0.5, float(o["y"]) + float(o["h"]) * 0.5)
+		var d: float = roamer["pos"].distance_to(center)
+		if d < best:
+			best = d
+			nearest = o
+	if nearest == null or best > 36.0:
+		return
+	_R().call("open_door_for_roamer", world, nearest)
+	roamer["door_cooldown"] = 0.85
 
 
 static func _speed(roamer: Dictionary) -> float:
@@ -236,6 +305,10 @@ static func _tick_melee_slow(roamer: Dictionary, dt: float) -> void:
 	roamer["melee_slow_ttl"] = maxf(0.0, ttl - dt)
 
 
+
+# =============================================================================
+# STATE MACHINE
+# =============================================================================
 static func _pick_state(world: Dictionary, roamer: Dictionary, sees_player: bool, hears: bool, player_alive: bool) -> void:
 	if not player_alive:
 		roamer["ai_state"] = "patrol"
@@ -306,6 +379,10 @@ static func _melee_rooted(roamer: Dictionary) -> bool:
 	return float(roamer.get("melee_slow_ttl", 0.0)) > 0.0
 
 
+
+# =============================================================================
+# COMBAT STATES
+# =============================================================================
 static func _do_combat(world: Dictionary, roamer: Dictionary, player: Dictionary, to_player: Vector2, d: float, dt: float) -> void:
 	if _should_flank(world, roamer) and not _melee_rooted(roamer):
 		roamer["ai_state"] = "flank"
@@ -371,6 +448,10 @@ static func _do_retreat(world: Dictionary, roamer: Dictionary, player: Dictionar
 		roamer["fire_cooldown"] = randf_range(0.85, 1.25) * ROAMER_RETREAT_FIRE_GAP
 
 
+
+# =============================================================================
+# FORAGE / PATROL / SEARCH
+# =============================================================================
 static func _find_forage_target(world: Dictionary, roamer: Dictionary) -> Variant:
 	var best: Variant = null
 	var best_d := ROAMER_SCAVENGE_SPOT
@@ -474,20 +555,35 @@ static func _do_search(world: Dictionary, roamer: Dictionary, dt: float) -> void
 		roamer["pos"] = roamer["pos"] + roamer["aim"] * _speed(roamer) * 0.7 * dt
 
 
-static func _do_patrol(_world: Dictionary, roamer: Dictionary, dt: float) -> void:
+static func _do_patrol(world: Dictionary, roamer: Dictionary, dt: float) -> void:
 	var anchor: Vector2 = roamer.get("patrol_anchor", roamer["pos"])
-	var phase := float(roamer.get("patrol_phase", 0.0)) + dt * (0.55 if bool(roamer.get("elite", false)) else 0.7)
-	roamer["patrol_phase"] = phase
-	# Wardens orbit their extract tighter; roamers wander farther.
-	var radius := 55.0 if bool(roamer.get("elite", false)) else 90.0
-	var wander := Vector2(cos(phase), sin(phase * 0.7)) * radius
-	var target := anchor + wander
-	var to_t: Vector2 = target - roamer["pos"]
+	var elite := bool(roamer.get("elite", false))
+	# Wardens keep a tighter beat around extracts; roamers walk a wide loop.
+	var min_r := 40.0 if elite else 110.0
+	var max_r := 95.0 if elite else 320.0
+	var waypoint: Vector2 = roamer.get("patrol_waypoint", Vector2.ZERO)
+	var need_new: bool = waypoint.length_squared() < 1.0 or roamer["pos"].distance_to(waypoint) < 22.0
+	if need_new:
+		var ang := randf() * TAU
+		var dist := randf_range(min_r, max_r)
+		waypoint = anchor + Vector2(cos(ang), sin(ang)) * dist
+		var mw := float(world.get("width", 3200.0))
+		var mh := float(world.get("height", 2400.0))
+		waypoint.x = clampf(waypoint.x, 80.0, mw - 80.0)
+		waypoint.y = clampf(waypoint.y, 80.0, mh - 80.0)
+		roamer["patrol_waypoint"] = waypoint
+	var to_t: Vector2 = waypoint - roamer["pos"]
 	if to_t.length() > 6.0:
 		roamer["aim"] = to_t.normalized()
-		roamer["pos"] = roamer["pos"] + roamer["aim"] * _speed(roamer) * (0.55 if bool(roamer.get("elite", false)) else 0.45) * dt
+		# Walk the beat — not a crawl; combat still uses full speed.
+		var walk := 0.62 if elite else 0.78
+		roamer["pos"] = roamer["pos"] + roamer["aim"] * _speed(roamer) * walk * dt
 
 ## Default ttl matches RaidSim.ROAMER_SUPPRESS_TTL (literal — defaults can't call _R()).
+
+# =============================================================================
+# SUPPRESSION / ALERT CALLS
+# =============================================================================
 static func apply_suppression(roamer: Dictionary, gap: float, ttl: float = 0.7) -> void:
 	roamer["suppress_ttl"] = maxf(float(roamer.get("suppress_ttl", 0.0)), ttl)
 	roamer["fire_cooldown"] = maxf(float(roamer.get("fire_cooldown", 0.0)), gap)

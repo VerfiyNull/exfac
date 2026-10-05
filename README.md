@@ -6,7 +6,7 @@ Solo extraction shooter. **Standalone** — not UltraSim.
 |-------|--------|
 | Engine | **Godot 4.3** |
 | Window | 1280×720 |
-| Field map | **7200×4800** (camera follows you) |
+| Field map | **9600×6400** (camera follows you) |
 
 ## Run on your PC
 
