@@ -2,6 +2,11 @@ class_name RaidSim
 extends RefCounted
 ## Pure field simulation — visuals read this state; no Godot nodes owned here.
 
+# Explicit preloads — headless / fresh clone has no global class_name cache yet.
+const Items := preload("res://scripts/systems/items.gd")
+const Skills := preload("res://scripts/systems/skills.gd")
+const MetaSim := preload("res://scripts/systems/meta.gd")
+
 const MAP_W := 4800.0
 const MAP_H := 3200.0
 const VISION_RANGE := 420.0

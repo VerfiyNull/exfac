@@ -1,18 +1,32 @@
 # EXFac on GitHub
 
-Repo: https://github.com/VerfiyNull/exfac  
-Default branch: **main** (push here directly — no PRs)
+Repo: https://github.com/VerfiyNull/exfac (public)  
+Default branch: **main**
 
 ## Latest build
 - Tag / title marker: **v0.3.3**
-- Release zip: https://github.com/VerfiyNull/exfac/releases/tag/v0.3.3
+- Release: https://github.com/VerfiyNull/exfac/releases/tag/v0.3.3
 
-## On your PC
+## Clone (correct local layout)
+
 ```bat
+cd %USERPROFILE%\Documents\code-Projects\Godot
 git clone https://github.com/VerfiyNull/exfac.git
 cd exfac
 git checkout main
 git pull origin main
 ```
-Open the folder that contains `project.godot` in Godot 4.3 (or `launch.bat`).
+
+Open the folder that contains `project.godot` (this `exfac` folder) in Godot 4.3, or run `launch.bat`.
+
+Do **not** open a nested unzip like `exfac-main\exfac-main\` — that path has no git remote.
+
 Title bottom-right must show **v0.3.3**.
+
+## Headless smoke
+
+```bat
+Godot_v4.3-stable_win64.exe --headless --path . -s res://scripts/smoke_headless.gd
+```
+
+Systems use explicit `preload()` so smoke works on a fresh clone without an editor `.godot` cache.

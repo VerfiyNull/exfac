@@ -2,6 +2,10 @@ class_name MetaSim
 extends RefCounted
 ## Between-run economy: locker, loadout risk, requisition, skill training. Scenes call this — never mutate meta from raw dicts in UI.
 
+# Explicit preloads — headless / fresh clone has no global class_name cache yet.
+const Items := preload("res://scripts/systems/items.gd")
+const Skills := preload("res://scripts/systems/skills.gd")
+
 const EGRESS_INFLUENCE_BASE := 35
 const EXTRACT_INFLUENCE_BASE := EGRESS_INFLUENCE_BASE  ## legacy alias
 const BASE_VISIT_CREDITS := 10

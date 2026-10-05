@@ -9,3 +9,8 @@ Thumbs.db
 *~
 .vscode/
 .idea/
+
+# Local Godot editor binary (launch.bat finds it next to project)
+Godot_v*_win64.exe
+Godot_v*_win64_console.exe
+godot.exe

@@ -2,6 +2,11 @@ class_name SaveGame
 extends RefCounted
 ## Solo persistence — locker, loadout, skills, run counters. Sanitize unknown ids on load.
 
+# Explicit preloads — headless / fresh clone has no global class_name cache yet.
+const Items := preload("res://scripts/systems/items.gd")
+const Skills := preload("res://scripts/systems/skills.gd")
+const MetaSim := preload("res://scripts/systems/meta.gd")
+
 const SAVE_PATH := "user://exfac_save.json"
 const SAVE_TMP_PATH := "user://exfac_save.json.tmp"
 const SAVE_VERSION := 2

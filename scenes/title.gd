@@ -1,6 +1,9 @@
 extends Control
 ## Title — brand + Continue / New only. Soft accent pulse; no extra chrome.
 
+const SaveGame := preload("res://scripts/systems/save.gd")
+const UiStyle := preload("res://scripts/systems/ui_style.gd")
+
 @onready var accent: ColorRect = $Accent
 @onready var save_hint: Label = %SaveHint
 @onready var continue_button: Button = %ContinueButton

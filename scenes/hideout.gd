@@ -1,6 +1,11 @@
 extends Control
 ## Base between runs — locker, kit, skills, deploy. Icon-first; Esc returns to title.
 
+const Items := preload("res://scripts/systems/items.gd")
+const Skills := preload("res://scripts/systems/skills.gd")
+const MetaSim := preload("res://scripts/systems/meta.gd")
+const UiStyle := preload("res://scripts/systems/ui_style.gd")
+
 @onready var title_label: Label = %TitleLabel
 @onready var stats_label: Label = %StatsLabel
 @onready var status_label: Label = %StatusLabel

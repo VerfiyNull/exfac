@@ -1,6 +1,12 @@
 extends Node
 ## Persistent solo session: meta economy + scene transitions + local save.
 
+# Explicit preloads — headless / fresh clone has no global class_name cache yet.
+const Items := preload("res://scripts/systems/items.gd")
+const Skills := preload("res://scripts/systems/skills.gd")
+const MetaSim := preload("res://scripts/systems/meta.gd")
+const SaveGame := preload("res://scripts/systems/save.gd")
+
 ## Bump when shipping a build players should be able to spot on the title screen.
 const APP_VERSION := "0.3.3"
 const RAID_HISTORY_MAX := 8
