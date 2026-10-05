@@ -350,7 +350,9 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 	world["obstacles"] = field["obstacles"]
 	world["decals"] = field["decals"]
 
-	world["player"] = _make_actor(world, "player", Vector2(280, MAP_H - 280), {
+	# SW ingress — keep the first steps clear of random rubble.
+	var spawn := _ingress_spawn(world["obstacles"])
+	world["player"] = _make_actor(world, "player", spawn, {
 		"hp": 100.0,
 		"max_hp": 100.0,
 		"speed": 175.0,
@@ -2085,11 +2087,34 @@ static func _wear_armor(world: Dictionary, absorbed: float, base_mit: float) -> 
 		_push_float(world, player["pos"], "ARMOR CRACKED", Color("e6b35a"), 1.0)
 
 
+## SW drop-in pad — clear of solids so New Run never starts inside a wall.
+static func _ingress_spawn(obstacles: Array) -> Vector2:
+	var candidates: Array = [
+		Vector2(280, MAP_H - 280),
+		Vector2(360, MAP_H - 320),
+		Vector2(220, MAP_H - 360),
+		Vector2(420, MAP_H - 240),
+		Vector2(300, MAP_H - 200),
+	]
+	for p in candidates:
+		if _place_away_from(obstacles, p.x, p.y, 22.0):
+			return p
+	return _rand_clear_pos(obstacles, 22.0, 80.0)
+
+
 ## Procedural compound — buildings, rubble, props, plus paint-only ground decals.
 static func _build_field() -> Dictionary:
 	var obstacles: Array = []
 	var decals: Array = []
 	var door_id := -200
+
+	# Ingress apron — painted pad so the drop-in corner reads as a starting zone.
+	decals.append({
+		"x": 80.0, "y": MAP_H - 520.0, "w": 520.0, "h": 440.0, "style": "pad",
+	})
+	decals.append({
+		"x": 120.0, "y": MAP_H - 200.0, "w": 380.0, "h": 80.0, "style": "road",
+	})
 
 	# Soft ground washes so the field isn't one flat slab.
 	for _i in 18:
@@ -2132,6 +2157,9 @@ static func _build_field() -> Dictionary:
 		var bh := randf_range(180.0, 360.0)
 		hub.x = clampf(hub.x, 120.0, MAP_W - bw - 120.0)
 		hub.y = clampf(hub.y, 120.0, MAP_H - bh - 120.0)
+		# Keep SW ingress free of buildings.
+		if hub.x < 700.0 and hub.y > MAP_H - 700.0:
+			continue
 		decals.append({
 			"x": hub.x - 30.0, "y": hub.y - 30.0,
 			"w": bw + 60.0, "h": bh + 60.0,
@@ -2155,9 +2183,14 @@ static func _build_field() -> Dictionary:
 			style = "wall"
 		elif randf() < 0.35:
 			style = "prop"
+		var ox := randf_range(60.0, MAP_W - w - 60.0)
+		var oy := randf_range(60.0, MAP_H - h - 60.0)
+		# Don't clutter the drop-in apron.
+		if ox < 650.0 and oy > MAP_H - 650.0:
+			continue
 		obstacles.append({
-			"x": randf_range(60.0, MAP_W - w - 60.0),
-			"y": randf_range(60.0, MAP_H - h - 60.0),
+			"x": ox,
+			"y": oy,
 			"w": w,
 			"h": h,
 			"style": style,

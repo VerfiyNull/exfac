@@ -90,6 +90,9 @@ func _maybe_teach_field_tips() -> void:
 	if Items.count_in_stacks(world["inventory"], "intel") > 0 and GameSession.consume_teach("intel_pulse"):
 		world["message"] = "T  burn Signal Chip — brief hostile sweep"
 		world["message_ttl"] = 4.0
+	elif GameSession.consume_teach("ground_loot"):
+		world["message"] = "Colored piles on the ground — E scoop · crates for bigger finds"
+		world["message_ttl"] = 4.0
 	elif GameSession.consume_teach("stance"):
 		world["message"] = "Ctrl crouch · RMB brace · G decoy · V flare"
 		world["message_ttl"] = 3.8
@@ -378,50 +381,24 @@ func _draw() -> void:
 	var player: Dictionary = world["player"]
 	var obstacles: Array = world["obstacles"]
 
+	# Blood scent trail — only when you can see the drip.
+	for drop in world.get("blood_trail", []):
+		var bp: Vector2 = drop["pos"]
+		if bool(player["alive"]) and not RaidSim.can_see_actor(player, bp, obstacles):
+			continue
+		var life := clampf(float(drop.get("ttl", 0.0)) / maxf(0.1, RaidSim.BLOOD_TRAIL_TTL), 0.15, 1.0)
+		draw_circle(bp, 3.5 + life * 2.0, Color(0.55, 0.08, 0.1, 0.35 * life))
+		draw_circle(bp + Vector2(2, -1), 2.0, Color(0.7, 0.12, 0.14, 0.45 * life))
+
 	# Vision ring — match fog (dusk/wound shrink vision_range).
 	if bool(player["alive"]):
 		var vision_r := float(player.get("vision_range", RaidSim.VISION_RANGE))
-		draw_arc(player["pos"], vision_r, 0.0, TAU, 64, Color(0.4, 0.7, 1.0, 0.12), 1.5)
+		draw_arc(player["pos"], vision_r, 0.0, TAU, 72, Color(0.4, 0.7, 1.0, 0.14), 1.6)
+		# Soft outer fog rim so the cut feels like night, not a hard clip.
+		draw_arc(player["pos"], vision_r + 18.0, 0.0, TAU, 72, Color(0.05, 0.07, 0.1, 0.18), 14.0)
 
 	for z in world["extracts"]:
-		var zp: Vector2 = z["pos"]
-		var zr := float(z["radius"])
-		var is_active := bool(world.get("extract_alarm", false)) and int(world.get("active_extract_id", -1)) == int(z["id"])
-		var contest := int(world.get("extract_contest_count", 0))
-		var pressure := String(z.get("pressure", "contested"))
-		var fill := Color(0.24, 0.81, 0.56, 0.18)
-		var ring := Color("3ecf8e")
-		match pressure:
-			"hot":
-				fill = Color(0.78, 0.28, 0.28, 0.16)
-				ring = Color(0.85, 0.4, 0.4, 0.85)
-			"quiet":
-				fill = Color(0.35, 0.65, 0.82, 0.14)
-				ring = Color(0.5, 0.78, 0.92, 0.8)
-			_:
-				fill = Color(0.24, 0.81, 0.56, 0.18)
-				ring = Color("3ecf8e")
-		if is_active and contest > 0:
-			fill = Color(0.91, 0.33, 0.33, 0.22)
-			ring = Color("e85454")
-		elif is_active:
-			fill = Color(0.9, 0.7, 0.35, 0.2)
-			ring = Color("e6b35a")
-		draw_circle(zp, zr, fill)
-		draw_arc(zp, zr, 0.0, TAU, 48, ring, 2.5 if is_active else 2.0)
-		var pct := 0.0
-		if is_active:
-			pct = float(world.get("extract_progress_01", 0.0))
-		else:
-			pct = clampf(float(z["progress"]) / float(z["hold_seconds"]), 0.0, 1.0)
-		if pct > 0.0:
-			draw_arc(zp, zr - 6.0, -PI * 0.5, -PI * 0.5 + TAU * pct, 48, Color("9dffc8") if contest == 0 else Color("ffb0b0"), 5.0)
-		var label := pressure.to_upper()
-		if is_active and contest > 0:
-			label = "CONTESTED"
-		elif is_active:
-			label = "FLARED"
-		draw_string(ThemeDB.fallback_font, zp + Vector2(-34, 4), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ring)
+		_draw_extract_pad(z, player)
 
 	for c in world["crates"]:
 		var cp: Vector2 = c["pos"]
@@ -437,6 +414,10 @@ func _draw() -> void:
 				draw_rect(Rect2(cp.x - 8, cp.y - 6, 16, 12), Color(0.15, 0.17, 0.2, 0.7), false, 1.0)
 			continue
 		_draw_loot_container(c, cp)
+		# Soft reach pulse when you're close enough to E.
+		var reach := float(c.get("radius", 16.0)) + float(player.get("radius", 14.0)) + 18.0
+		if bool(player["alive"]) and player["pos"].distance_to(cp) <= reach:
+			draw_arc(cp, 16.0, 0.0, TAU, 28, Color(1, 1, 1, 0.18), 1.2)
 		# Ransack progress on the active target.
 		if int(player.get("loot_target_id", -1)) == int(c["id"]) and float(player.get("loot_channel", 0.0)) > 0.0:
 			var max_c := maxf(0.2, float(player.get("loot_channel_max", 1.0)))
@@ -554,7 +535,63 @@ func _draw() -> void:
 		col.a = alpha
 		draw_string(ThemeDB.fallback_font, f["pos"], String(f["text"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
 
+	# Field dusk wash — late raids cool and darken without hiding the HUD.
+	var dusk_draw := float(world.get("dusk_01", 0.0))
+	if dusk_draw > 0.02:
+		var wash := Color(0.08, 0.06, 0.12, 0.12 + dusk_draw * 0.28)
+		draw_rect(Rect2(0, 0, world["width"], world["height"]), wash)
+
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
+func _draw_extract_pad(z: Dictionary, player: Dictionary) -> void:
+	var zp: Vector2 = z["pos"]
+	var zr := float(z["radius"])
+	var is_active := bool(world.get("extract_alarm", false)) and int(world.get("active_extract_id", -1)) == int(z["id"])
+	var contest := int(world.get("extract_contest_count", 0))
+	var pressure := String(z.get("pressure", "contested"))
+	var fill := Color(0.24, 0.81, 0.56, 0.18)
+	var ring := Color("3ecf8e")
+	match pressure:
+		"hot":
+			fill = Color(0.78, 0.28, 0.28, 0.16)
+			ring = Color(0.85, 0.4, 0.4, 0.85)
+		"quiet":
+			fill = Color(0.35, 0.65, 0.82, 0.14)
+			ring = Color(0.5, 0.78, 0.92, 0.8)
+		_:
+			fill = Color(0.24, 0.81, 0.56, 0.18)
+			ring = Color("3ecf8e")
+	if is_active and contest > 0:
+		fill = Color(0.91, 0.33, 0.33, 0.22)
+		ring = Color("e85454")
+	elif is_active:
+		fill = Color(0.9, 0.7, 0.35, 0.2)
+		ring = Color("e6b35a")
+	draw_circle(zp, zr, fill)
+	draw_arc(zp, zr, 0.0, TAU, 48, ring, 2.5 if is_active else 2.0)
+	# Landing chevrons — pad reads as a lift, not a plain disc.
+	for i in 4:
+		var a := float(i) * TAU * 0.25 + float(world.get("time_alive", 0.0)) * (0.4 if is_active else 0.0)
+		var outer := zp + Vector2(cos(a), sin(a)) * (zr - 10.0)
+		var inner := zp + Vector2(cos(a), sin(a)) * (zr - 22.0)
+		draw_line(outer, inner, Color(ring.r, ring.g, ring.b, 0.55), 2.0)
+	var pct := 0.0
+	if is_active:
+		pct = float(world.get("extract_progress_01", 0.0))
+	else:
+		pct = clampf(float(z["progress"]) / float(z["hold_seconds"]), 0.0, 1.0)
+	if pct > 0.0:
+		draw_arc(zp, zr - 6.0, -PI * 0.5, -PI * 0.5 + TAU * pct, 48, Color("9dffc8") if contest == 0 else Color("ffb0b0"), 5.0)
+	var label := pressure.to_upper()
+	if is_active and contest > 0:
+		label = "CONTESTED"
+	elif is_active:
+		label = "FLARED"
+	draw_string(ThemeDB.fallback_font, zp + Vector2(-34, 4), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ring)
+	# Soft proximity wash when you're on the apron.
+	if bool(player.get("alive", false)) and player["pos"].distance_to(zp) <= zr + 40.0:
+		draw_arc(zp, zr + 8.0, 0.0, TAU, 40, Color(ring.r, ring.g, ring.b, 0.2), 2.0)
 
 
 func _draw_decal(d: Dictionary) -> void:
@@ -633,6 +670,17 @@ func _draw_obstacle(o: Dictionary) -> void:
 		draw_line(r.position + Vector2(r.size.x * 0.35, 3), r.position + Vector2(r.size.x * 0.35, r.size.y - 3), accent, 2.0)
 	else:
 		draw_line(r.position + Vector2(3, r.size.y * 0.4), r.position + Vector2(r.size.x - 3, r.size.y * 0.4), accent, 2.0)
+	# Building windows — tiny lit slits so compounds feel inhabited.
+	if style == "building" and r.size.x >= 80.0 and r.size.y <= 40.0:
+		var wx := r.position.x + 14.0
+		while wx < r.end.x - 14.0:
+			draw_rect(Rect2(wx, r.position.y + 6.0, 8.0, 10.0), Color(0.75, 0.85, 0.95, 0.22))
+			wx += 22.0
+	elif style == "building" and r.size.y >= 80.0 and r.size.x <= 40.0:
+		var wy := r.position.y + 14.0
+		while wy < r.end.y - 14.0:
+			draw_rect(Rect2(r.position.x + 6.0, wy, 10.0, 8.0), Color(0.75, 0.85, 0.95, 0.22))
+			wy += 22.0
 
 
 func _draw_loot_container(c: Dictionary, cp: Vector2) -> void:
@@ -727,10 +775,22 @@ func _draw_minimap() -> void:
 	minimap.draw_rect(Rect2(Vector2.ZERO, minimap.size), Color(0.04, 0.06, 0.08, 0.9))
 	var sx := w / float(world["width"])
 	var sy := h / float(world["height"])
+	# Road / pad washes first so the compound skeleton reads.
+	for d in world.get("decals", []):
+		var style := String(d.get("style", ""))
+		if style != "road" and style != "pad":
+			continue
+		var dr := Rect2(float(d["x"]) * sx, float(d["y"]) * sy, maxf(1.0, float(d["w"]) * sx), maxf(1.0, float(d["h"]) * sy))
+		minimap.draw_rect(dr, Color(0.22, 0.24, 0.28, 0.45) if style == "road" else Color(0.2, 0.26, 0.3, 0.35))
 	# Faint obstacle blobs for orientation.
 	for o in world["obstacles"]:
 		var r := Rect2(float(o["x"]) * sx, float(o["y"]) * sy, maxf(1.0, float(o["w"]) * sx), maxf(1.0, float(o["h"]) * sy))
-		minimap.draw_rect(r, Color(0.25, 0.3, 0.36, 0.55))
+		var ocol := Color(0.25, 0.3, 0.36, 0.55)
+		if String(o.get("kind", "")) == "door":
+			ocol = Color(0.7, 0.5, 0.25, 0.7)
+		elif String(o.get("style", "")) == "building":
+			ocol = Color(0.32, 0.4, 0.5, 0.65)
+		minimap.draw_rect(r, ocol)
 	for z in world["extracts"]:
 		var zp: Vector2 = z["pos"]
 		var is_active := bool(world.get("extract_alarm", false)) and int(world.get("active_extract_id", -1)) == int(z["id"])

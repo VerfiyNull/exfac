@@ -8,7 +8,7 @@ const MetaSim := preload("res://scripts/systems/meta.gd")
 const SaveGame := preload("res://scripts/systems/save.gd")
 
 ## Bump when shipping a build players should be able to spot on the title screen.
-const APP_VERSION := "0.3.4"
+const APP_VERSION := "0.3.5"
 const RAID_HISTORY_MAX := 8
 
 var meta: Dictionary = {}
