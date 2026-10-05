@@ -344,11 +344,17 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		"dusk_01": 0.0,
 		"dusk_warned": false,
 		"decals": [],
+		"districts": [],
+		"landmarks": [],
 	}
 
 	var field := _build_field()
 	world["obstacles"] = field["obstacles"]
 	world["decals"] = field["decals"]
+	world["districts"] = field.get("districts", [])
+	world["landmarks"] = field.get("landmarks", [])
+	var loot_spots: Array = field.get("loot_spots", [])
+	var roamer_anchors: Array = field.get("roamer_anchors", [])
 
 	# SW ingress — keep the first steps clear of random rubble.
 	var spawn := _ingress_spawn(world["obstacles"])
@@ -414,9 +420,14 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		Items.add_to_stash(world["inventory"], Items.stack_of("medkit", pack))
 		_refresh_bag_cap(world)
 
-	# Spread roamers across the larger compound.
+	# Roamers prefer district anchors so voids stay quieter than compounds.
 	for _i in 34:
-		var sp := _rand_clear_pos(world["obstacles"], 20.0, 90.0)
+		var sp: Vector2
+		if not roamer_anchors.is_empty() and randf() < 0.78:
+			var anchor: Vector2 = roamer_anchors[_i % roamer_anchors.size()]
+			sp = _rand_near(world["obstacles"], anchor, 220.0, 20.0)
+		else:
+			sp = _rand_clear_pos(world["obstacles"], 20.0, 90.0)
 		world["roamers"].append(_make_actor(world, "roamer", sp, {
 			"hp": randf_range(45.0, 70.0),
 			"max_hp": 70.0,
@@ -446,7 +457,7 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 			world["roamers"].back()["ai_state"] = "dormant"
 			world["roamers"].back()["aggro_range"] = float(world["roamers"].back()["aggro_range"]) * 0.45
 
-	# Mixed containers + loose ground piles so the field reads scavenged, not empty.
+	# Containers prefer landmark loot spots; leftovers fill random clear ground.
 	var spawn_plan: Array = []
 	for _i in 20:
 		spawn_plan.append("crate")
@@ -461,16 +472,53 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 	for _i in 28:
 		spawn_plan.append("ground_loot")
 	spawn_plan.shuffle()
+	# Prefer specialty spots for specialty kinds, ground spots for ground piles.
+	var specialty_spots: Array = []
+	var ground_spots: Array = []
+	var other_spots: Array = []
+	for spot in loot_spots:
+		match String(spot.get("prefer", "")):
+			"specialty":
+				specialty_spots.append(spot)
+			"ground":
+				ground_spots.append(spot)
+			_:
+				other_spots.append(spot)
+	var si := 0
+	var gi := 0
+	var oi := 0
 	for kind in spawn_plan:
-		var sp := _rand_clear_pos(world["obstacles"], 16.0, 50.0)
-		var is_ground := String(kind) == "ground_loot"
+		var prefer := String(kind)
+		var sp: Vector2
+		var spot: Dictionary = {}
+		var is_specialty := prefer in ["weapon_case", "intel_safe", "med_cache", "ammo_crate"]
+		if is_specialty and si < specialty_spots.size():
+			spot = specialty_spots[si]
+			si += 1
+		elif prefer == "ground_loot" and gi < ground_spots.size():
+			spot = ground_spots[gi]
+			gi += 1
+		elif oi < other_spots.size():
+			spot = other_spots[oi]
+			oi += 1
+		elif gi < ground_spots.size():
+			spot = ground_spots[gi]
+			gi += 1
+		elif si < specialty_spots.size():
+			spot = specialty_spots[si]
+			si += 1
+		if not spot.is_empty():
+			sp = _rand_near(world["obstacles"], spot["pos"], float(spot.get("radius", 90.0)), 14.0)
+		else:
+			sp = _rand_clear_pos(world["obstacles"], 16.0, 50.0)
+		var is_ground := prefer == "ground_loot"
 		world["crates"].append({
 			"id": _alloc_id(world),
 			"pos": sp,
 			"radius": 11.0 if is_ground else 17.0,
 			"opened": false,
-			"kind": String(kind),
-			"contents": Items.roll_container_loot(String(kind)),
+			"kind": prefer,
+			"contents": Items.roll_container_loot(prefer),
 			"tint": randi(),
 		})
 
@@ -484,6 +532,14 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		# East mid — secondary lift for the larger compound.
 		{"id": _alloc_id(world), "pos": Vector2(MAP_W - 200, MAP_H * 0.55), "radius": 54.0, "hold_seconds": 3.3, "progress": 0.0, "active": true, "pressure": "contested", "alarm_radius": 1100.0, "contest_pad": 0.1, "bleed_mult": 0.95},
 	]
+	# Landmark each extract approach for labels / minimap.
+	for z in world["extracts"]:
+		world["landmarks"].append({
+			"id": int(z["id"]),
+			"name": String(z.get("pressure", "OUT")).to_upper(),
+			"pos": z["pos"],
+			"kind": "extract",
+		})
 	# One Warden per extract — tougher elites that hold the exits.
 	for z in world["extracts"]:
 		var zp: Vector2 = z["pos"]
@@ -2102,177 +2158,457 @@ static func _ingress_spawn(obstacles: Array) -> Vector2:
 	return _rand_clear_pos(obstacles, 22.0, 80.0)
 
 
-## Procedural compound — buildings, rubble, props, plus paint-only ground decals.
+## District compound — road spine, themed cells, prefab buildings, landmark loot anchors.
 static func _build_field() -> Dictionary:
 	var obstacles: Array = []
 	var decals: Array = []
+	var districts: Array = []
+	var landmarks: Array = []
+	var loot_spots: Array = []
+	var roamer_anchors: Array = []
 	var door_id := -200
+	var landmark_seq := 1
 
-	# Ingress apron — painted pad so the drop-in corner reads as a starting zone.
-	decals.append({
-		"x": 80.0, "y": MAP_H - 520.0, "w": 520.0, "h": 440.0, "style": "pad",
-	})
-	decals.append({
-		"x": 120.0, "y": MAP_H - 200.0, "w": 380.0, "h": 80.0, "style": "road",
-	})
-
-	# Soft ground washes so the field isn't one flat slab.
-	for _i in 18:
-		var dw := randf_range(280.0, 720.0)
-		var dh := randf_range(220.0, 560.0)
-		decals.append({
-			"x": randf_range(80.0, MAP_W - dw - 80.0),
-			"y": randf_range(80.0, MAP_H - dh - 80.0),
-			"w": dw,
-			"h": dh,
-			"style": ["dirt", "asphalt", "yard", "gravel"][randi() % 4],
-		})
-
-	# Road strips — long asphalt corridors between clusters.
-	for _i in 4:
-		var horizontal := randf() < 0.5
-		if horizontal:
-			var y := randf_range(400.0, MAP_H - 400.0)
-			var h := randf_range(70.0, 110.0)
-			decals.append({"x": 120.0, "y": y, "w": MAP_W - 240.0, "h": h, "style": "road"})
-		else:
-			var x := randf_range(400.0, MAP_W - 400.0)
-			var w := randf_range(70.0, 110.0)
-			decals.append({"x": x, "y": 120.0, "w": w, "h": MAP_H - 240.0, "style": "road"})
-
-	# Building clusters — each gets walls, a door, and yard pad.
-	var hubs: Array = [
-		Vector2(900, 700), Vector2(2200, 900), Vector2(3600, 650), Vector2(5200, 800),
-		Vector2(6400, 1200), Vector2(1100, 2000), Vector2(2800, 2100), Vector2(4500, 1900),
-		Vector2(6000, 2300), Vector2(800, 3400), Vector2(2400, 3600), Vector2(4000, 3400),
-		Vector2(5600, 3600), Vector2(6800, 3000), Vector2(1600, 2800), Vector2(3200, 1400),
-		Vector2(4800, 2800), Vector2(700, 1400), Vector2(5000, 1200), Vector2(6200, 4000),
+	var extracts: Array = [
+		{"name": "HOT", "pos": Vector2(MAP_W - 180, 160), "kind": "extract"},
+		{"name": "QUIET", "pos": Vector2(160, 160), "kind": "extract"},
+		{"name": "SOUTH", "pos": Vector2(MAP_W * 0.5, MAP_H - 160), "kind": "extract"},
+		{"name": "EAST", "pos": Vector2(MAP_W - 200, MAP_H * 0.55), "kind": "extract"},
 	]
-	hubs.shuffle()
-	var building_count := 12 + randi() % 5
-	for i in building_count:
-		var hub: Vector2 = hubs[i % hubs.size()]
-		hub += Vector2(randf_range(-140, 140), randf_range(-120, 120))
-		var bw := randf_range(220.0, 420.0)
-		var bh := randf_range(180.0, 360.0)
-		hub.x = clampf(hub.x, 120.0, MAP_W - bw - 120.0)
-		hub.y = clampf(hub.y, 120.0, MAP_H - bh - 120.0)
-		# Keep SW ingress free of buildings.
-		if hub.x < 700.0 and hub.y > MAP_H - 700.0:
-			continue
-		decals.append({
-			"x": hub.x - 30.0, "y": hub.y - 30.0,
-			"w": bw + 60.0, "h": bh + 60.0,
-			"style": "pad",
-		})
-		door_id = _append_building(obstacles, hub, bw, bh, door_id)
+	var ingress := Vector2(280, MAP_H - 280)
 
-	# Standalone rubble / crates piles / shipping walls for LOS breakers.
-	for _i in 48:
-		var w := randf_range(40.0, 180.0)
-		var h := randf_range(36.0, 160.0)
-		var tall := randf() < 0.4
-		if tall:
-			w = randf_range(28.0, 55.0)
-			h = randf_range(140.0, 320.0)
-		elif randf() < 0.25:
-			w = randf_range(140.0, 280.0)
-			h = randf_range(28.0, 48.0)
-		var style := "rubble"
-		if tall:
-			style = "wall"
-		elif randf() < 0.35:
-			style = "prop"
-		var ox := randf_range(60.0, MAP_W - w - 60.0)
-		var oy := randf_range(60.0, MAP_H - h - 60.0)
-		# Don't clutter the drop-in apron.
-		if ox < 650.0 and oy > MAP_H - 650.0:
+	# --- District grid (~8 themed cells) ---
+	var cell_defs: Array = [
+		{"x": 0.0, "y": MAP_H * 0.62, "w": MAP_W * 0.32, "h": MAP_H * 0.38, "theme": "ingress", "name": "Ingress"},
+		{"x": MAP_W * 0.28, "y": MAP_H * 0.62, "w": MAP_W * 0.40, "h": MAP_H * 0.38, "theme": "yard", "name": "Yards"},
+		{"x": MAP_W * 0.64, "y": MAP_H * 0.55, "w": MAP_W * 0.36, "h": MAP_H * 0.45, "theme": "extract", "name": "South Approach"},
+		{"x": 0.0, "y": MAP_H * 0.28, "w": MAP_W * 0.30, "h": MAP_H * 0.36, "theme": "warehouse", "name": "Warehouse Row"},
+		{"x": MAP_W * 0.28, "y": MAP_H * 0.28, "w": MAP_W * 0.40, "h": MAP_H * 0.36, "theme": "ruins", "name": "Ruins"},
+		{"x": MAP_W * 0.64, "y": MAP_H * 0.28, "w": MAP_W * 0.36, "h": MAP_H * 0.30, "theme": "warehouse", "name": "East Sheds"},
+		{"x": 0.0, "y": 0.0, "w": MAP_W * 0.38, "h": MAP_H * 0.30, "theme": "extract", "name": "NW Approach"},
+		{"x": MAP_W * 0.36, "y": 0.0, "w": MAP_W * 0.64, "h": MAP_H * 0.30, "theme": "extract", "name": "NE Approach"},
+	]
+	for d in cell_defs:
+		var theme := String(d["theme"])
+		var wash := "yard"
+		match theme:
+			"ingress":
+				wash = "pad"
+			"yard":
+				wash = "yard"
+			"warehouse":
+				wash = "asphalt"
+			"ruins":
+				wash = "dirt"
+			"extract":
+				wash = "gravel"
+		decals.append({
+			"x": float(d["x"]) + 20.0,
+			"y": float(d["y"]) + 20.0,
+			"w": float(d["w"]) - 40.0,
+			"h": float(d["h"]) - 40.0,
+			"style": wash,
+			"theme": theme,
+		})
+		districts.append(d.duplicate(true))
+		var center := Vector2(float(d["x"]) + float(d["w"]) * 0.5, float(d["y"]) + float(d["h"]) * 0.5)
+		if theme != "ingress":
+			roamer_anchors.append(center)
+			landmarks.append({
+				"id": landmark_seq,
+				"name": String(d["name"]),
+				"pos": center,
+				"kind": "district",
+			})
+			landmark_seq += 1
+
+	# --- Road spine: cross + ring, linking ingress to extracts ---
+	var road_w := 92.0
+	var hx := [
+		MAP_H * 0.22 + randf_range(-60.0, 60.0),
+		MAP_H * 0.48 + randf_range(-50.0, 50.0),
+		MAP_H * 0.74 + randf_range(-50.0, 50.0),
+	]
+	var vx := [
+		MAP_W * 0.22 + randf_range(-70.0, 70.0),
+		MAP_W * 0.50 + randf_range(-60.0, 60.0),
+		MAP_W * 0.76 + randf_range(-70.0, 70.0),
+	]
+	for y in hx:
+		decals.append({"x": 80.0, "y": float(y) - road_w * 0.5, "w": MAP_W - 160.0, "h": road_w, "style": "road"})
+	for x in vx:
+		decals.append({"x": float(x) - road_w * 0.5, "y": 80.0, "w": road_w, "h": MAP_H - 160.0, "style": "road"})
+	# Ingress feeder + extract approach stubs.
+	decals.append({"x": 80.0, "y": MAP_H - 360.0, "w": 520.0, "h": 100.0, "style": "road"})
+	decals.append({"x": 80.0, "y": MAP_H - 520.0, "w": 440.0, "h": 360.0, "style": "pad"})
+	for ex in extracts:
+		var ep: Vector2 = ex["pos"]
+		decals.append({
+			"x": ep.x - 140.0, "y": ep.y - 140.0, "w": 280.0, "h": 280.0, "style": "pad", "theme": "extract",
+		})
+		# Short road stub toward map center.
+		var toward := Vector2(MAP_W * 0.5, MAP_H * 0.5) - ep
+		var stub_len := 420.0
+		var stub_dir := toward.normalized()
+		var mid := ep + stub_dir * (stub_len * 0.45)
+		if absf(stub_dir.x) > absf(stub_dir.y):
+			decals.append({"x": mid.x - stub_len * 0.5, "y": mid.y - 40.0, "w": stub_len, "h": 80.0, "style": "road"})
+		else:
+			decals.append({"x": mid.x - 40.0, "y": mid.y - stub_len * 0.5, "w": 80.0, "h": stub_len, "style": "road"})
+		roamer_anchors.append(ep)
+		loot_spots.append({"pos": ep, "radius": 160.0, "prefer": "ground"})
+
+	# Thin barrier strips along some road stretches for roadside cover.
+	for i in 10:
+		var along_h := randf() < 0.5
+		if along_h:
+			var y := float(hx[i % hx.size()]) + (48.0 if i % 2 == 0 else -48.0) - 12.0
+			var x := randf_range(200.0, MAP_W - 420.0)
+			if x < 700.0 and y > MAP_H - 700.0:
+				continue
+			obstacles.append({"x": x, "y": y, "w": randf_range(140.0, 280.0), "h": 24.0, "style": "wall", "kind": "solid"})
+		else:
+			var x2 := float(vx[i % vx.size()]) + (48.0 if i % 2 == 0 else -48.0) - 12.0
+			var y2 := randf_range(200.0, MAP_H - 420.0)
+			if x2 < 700.0 and y2 > MAP_H - 700.0:
+				continue
+			obstacles.append({"x": x2, "y": y2, "w": 24.0, "h": randf_range(140.0, 280.0), "style": "wall", "kind": "solid"})
+
+	# --- Buildings per district theme ---
+	var shed_names := ["Tool Shed", "Guard Hut", "Side Shed", "Pump House"]
+	var wh_names := ["Warehouse A", "Warehouse B", "Cold Store", "Loading Bay"]
+	var yard_names := ["Courtyard", "Motor Pool", "Open Yard", "Scrap Court"]
+	var bunker_names := ["Bunker", "Hard Room", "Vault Cell", "Armory"]
+	var name_i := 0
+
+	for d in cell_defs:
+		var theme := String(d["theme"])
+		var dx := float(d["x"])
+		var dy := float(d["y"])
+		var dw := float(d["w"])
+		var dh := float(d["h"])
+		if theme == "ingress":
+			continue
+		var count := 2
+		var styles: Array = ["shed", "shed"]
+		match theme:
+			"yard":
+				count = 3
+				styles = ["courtyard", "shed", "shed"]
+			"warehouse":
+				count = 3
+				styles = ["warehouse", "warehouse", "shed"]
+			"ruins":
+				count = 4
+				styles = ["shed", "courtyard", "bunker", "shed"]
+			"extract":
+				count = 2
+				styles = ["bunker", "shed"]
+		for bi in count:
+			var prefab := String(styles[bi % styles.size()])
+			var bw := 240.0
+			var bh := 200.0
+			match prefab:
+				"shed":
+					bw = randf_range(160.0, 240.0)
+					bh = randf_range(140.0, 200.0)
+				"warehouse":
+					bw = randf_range(360.0, 520.0)
+					bh = randf_range(200.0, 280.0)
+				"courtyard":
+					bw = randf_range(280.0, 400.0)
+					bh = randf_range(240.0, 340.0)
+				"bunker":
+					bw = randf_range(180.0, 260.0)
+					bh = randf_range(160.0, 220.0)
+			var ox := dx + randf_range(60.0, maxf(60.0, dw - bw - 60.0))
+			var oy := dy + randf_range(60.0, maxf(60.0, dh - bh - 60.0))
+			# Keep SW ingress apron clear.
+			if ox < 700.0 and oy + bh > MAP_H - 700.0:
+				continue
+			# Avoid paving over extract pads.
+			var blocked := false
+			for ex2 in extracts:
+				var ep2: Vector2 = ex2["pos"]
+				if Rect2(ox - 40.0, oy - 40.0, bw + 80.0, bh + 80.0).has_point(ep2):
+					blocked = true
+					break
+			if blocked:
+				continue
+			decals.append({
+				"x": ox - 24.0, "y": oy - 24.0, "w": bw + 48.0, "h": bh + 48.0,
+				"style": "pad", "theme": theme,
+			})
+			var bname := "Structure"
+			match prefab:
+				"shed":
+					bname = shed_names[name_i % shed_names.size()]
+				"warehouse":
+					bname = wh_names[name_i % wh_names.size()]
+				"courtyard":
+					bname = yard_names[name_i % yard_names.size()]
+				"bunker":
+					bname = bunker_names[name_i % bunker_names.size()]
+			name_i += 1
+			var center_b := Vector2(ox + bw * 0.5, oy + bh * 0.5)
+			landmarks.append({"id": landmark_seq, "name": bname, "pos": center_b, "kind": prefab})
+			landmark_seq += 1
+			door_id = _append_prefab(obstacles, Vector2(ox, oy), bw, bh, prefab, door_id)
+			# Loot: interiors / courtyard edges; bunkers & warehouses prefer specialty.
+			var prefer := "crate"
+			if prefab == "bunker" or prefab == "warehouse":
+				prefer = "specialty"
+			elif prefab == "courtyard":
+				prefer = "ground"
+			loot_spots.append({"pos": center_b, "radius": 70.0, "prefer": prefer})
+			loot_spots.append({"pos": center_b + Vector2(randf_range(-40, 40), randf_range(-30, 30)), "radius": 80.0, "prefer": prefer})
+			# Door-side cover cluster.
+			_append_cover_cluster(obstacles, Vector2(ox + bw + 20.0, oy + bh * 0.5), 3)
+			roamer_anchors.append(center_b)
+
+	# Roadside cover packs + light rubble away from ingress.
+	for _i in 22:
+		var along := Vector2(
+			float(vx[randi() % vx.size()]) + randf_range(-80.0, 80.0),
+			float(hx[randi() % hx.size()]) + randf_range(-80.0, 80.0)
+		)
+		if along.x < 700.0 and along.y > MAP_H - 700.0:
+			continue
+		_append_cover_cluster(obstacles, along, 2 + randi() % 3)
+		if randf() < 0.45:
+			loot_spots.append({"pos": along, "radius": 100.0, "prefer": "ground"})
+
+	for _i in 18:
+		var w := randf_range(40.0, 140.0)
+		var h := randf_range(36.0, 120.0)
+		var ox := randf_range(80.0, MAP_W - w - 80.0)
+		var oy := randf_range(80.0, MAP_H - h - 80.0)
+		if ox < 700.0 and oy > MAP_H - 700.0:
 			continue
 		obstacles.append({
-			"x": ox,
-			"y": oy,
-			"w": w,
-			"h": h,
-			"style": style,
+			"x": ox, "y": oy, "w": w, "h": h,
+			"style": "rubble" if randf() < 0.55 else "prop",
 			"kind": "solid",
 		})
 
-	# Extra freestanding doors on a few corridor walls.
-	for _i in 6:
-		var vertical := randf() < 0.5
-		if vertical:
-			obstacles.append({
-				"x": randf_range(200.0, MAP_W - 200.0),
-				"y": randf_range(200.0, MAP_H - 200.0),
-				"w": 40.0,
-				"h": 72.0,
-				"kind": "door",
-				"open": false,
-				"id": door_id,
-				"style": "door",
-			})
-		else:
-			obstacles.append({
-				"x": randf_range(200.0, MAP_W - 200.0),
-				"y": randf_range(200.0, MAP_H - 200.0),
-				"w": 72.0,
-				"h": 40.0,
-				"kind": "door",
-				"open": false,
-				"id": door_id,
-				"style": "door",
-			})
-		door_id -= 1
+	# Hard-clear ingress + extract pads so starts / lifts aren't buried in solids.
+	_carve_clear_disk(obstacles, ingress, 160.0)
+	for ex3 in extracts:
+		_carve_clear_disk(obstacles, ex3["pos"], 120.0)
 
-	return {"obstacles": obstacles, "decals": decals}
+	return {
+		"obstacles": obstacles,
+		"decals": decals,
+		"districts": districts,
+		"landmarks": landmarks,
+		"loot_spots": loot_spots,
+		"roamer_anchors": roamer_anchors,
+	}
 
 
-## Four-wall footprint with one door gap — reads as a room you can clear.
-static func _append_building(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
+## Prefab dispatcher — shed / warehouse / courtyard / bunker.
+static func _append_prefab(obstacles: Array, origin: Vector2, bw: float, bh: float, prefab: String, door_id: int) -> int:
+	match prefab:
+		"warehouse":
+			return _append_warehouse(obstacles, origin, bw, bh, door_id)
+		"courtyard":
+			return _append_courtyard(obstacles, origin, bw, bh, door_id)
+		"bunker":
+			return _append_bunker(obstacles, origin, bw, bh, door_id)
+		_:
+			return _append_shed(obstacles, origin, bw, bh, door_id)
+
+
+static func _wall_rect(obstacles: Array, x: float, y: float, w: float, h: float, style: String = "building") -> void:
+	obstacles.append({"x": x, "y": y, "w": w, "h": h, "style": style, "kind": "solid", "prefab": style})
+
+
+static func _door_rect(obstacles: Array, x: float, y: float, w: float, h: float, door_id: int) -> void:
+	obstacles.append({
+		"x": x, "y": y, "w": w, "h": h,
+		"kind": "door", "open": false, "id": door_id, "style": "door",
+	})
+
+
+## Small 1-door room with light interior clutter.
+static func _append_shed(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
+	var t := 26.0
+	var ox := origin.x
+	var oy := origin.y
+	_wall_rect(obstacles, ox, oy, bw, t, "shed")
+	_wall_rect(obstacles, ox, oy + bh - t, bw, t, "shed")
+	_wall_rect(obstacles, ox, oy + t, t, bh - t * 2.0, "shed")
+	var door_h := 68.0
+	var door_y := oy + (bh - door_h) * 0.5
+	var east_x := ox + bw - t
+	var top_h := maxf(20.0, door_y - (oy + t))
+	var bot_y := door_y + door_h
+	var bot_h := maxf(20.0, (oy + bh - t) - bot_y)
+	_wall_rect(obstacles, east_x, oy + t, t, top_h, "shed")
+	_wall_rect(obstacles, east_x, bot_y, t, bot_h, "shed")
+	_door_rect(obstacles, east_x, door_y, t, door_h, door_id)
+	if randf() < 0.75:
+		var iw := randf_range(30.0, 56.0)
+		var ih := randf_range(30.0, 56.0)
+		obstacles.append({
+			"x": ox + t + 18.0, "y": oy + t + 18.0, "w": iw, "h": ih,
+			"style": "prop", "kind": "solid",
+		})
+	return door_id - 1
+
+
+## Long hall, two doors, interior columns.
+static func _append_warehouse(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
 	var t := 28.0
 	var ox := origin.x
 	var oy := origin.y
-	# North / south long walls.
-	obstacles.append({"x": ox, "y": oy, "w": bw, "h": t, "style": "building", "kind": "solid"})
-	obstacles.append({"x": ox, "y": oy + bh - t, "w": bw, "h": t, "style": "building", "kind": "solid"})
-	# West wall full; east wall split around a door.
-	obstacles.append({"x": ox, "y": oy + t, "w": t, "h": bh - t * 2.0, "style": "building", "kind": "solid"})
+	_wall_rect(obstacles, ox, oy, bw, t, "warehouse")
+	_wall_rect(obstacles, ox, oy + bh - t, bw, t, "warehouse")
+	# West wall with north door.
 	var door_h := 70.0
+	var west_door_y := oy + bh * 0.28
+	_wall_rect(obstacles, ox, oy + t, t, maxf(20.0, west_door_y - (oy + t)), "warehouse")
+	_door_rect(obstacles, ox, west_door_y, t, door_h, door_id)
+	door_id -= 1
+	var west_bot_y := west_door_y + door_h
+	_wall_rect(obstacles, ox, west_bot_y, t, maxf(20.0, (oy + bh - t) - west_bot_y), "warehouse")
+	# East wall with south door.
+	var east_x := ox + bw - t
+	var east_door_y := oy + bh * 0.58
+	_wall_rect(obstacles, east_x, oy + t, t, maxf(20.0, east_door_y - (oy + t)), "warehouse")
+	_door_rect(obstacles, east_x, east_door_y, t, door_h, door_id)
+	door_id -= 1
+	var east_bot_y := east_door_y + door_h
+	_wall_rect(obstacles, east_x, east_bot_y, t, maxf(20.0, (oy + bh - t) - east_bot_y), "warehouse")
+	# Interior support columns — break LOS down the hall.
+	var cols := 2 + randi() % 2
+	for ci in cols:
+		var cx := ox + t + 40.0 + (bw - t * 2.0 - 80.0) * (float(ci) + 0.5) / float(cols)
+		var cy := oy + bh * 0.5 - 18.0
+		obstacles.append({
+			"x": cx, "y": cy, "w": 36.0, "h": 36.0,
+			"style": "column", "kind": "solid", "prefab": "warehouse",
+		})
+	# Side crates.
+	obstacles.append({
+		"x": ox + t + 24.0, "y": oy + t + 20.0, "w": 48.0, "h": 40.0,
+		"style": "prop", "kind": "solid",
+	})
+	return door_id
+
+
+## U-shape open toward the nearest road (south side open).
+static func _append_courtyard(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
+	var t := 28.0
+	var ox := origin.x
+	var oy := origin.y
+	_wall_rect(obstacles, ox, oy, bw, t, "courtyard")
+	# West arm — optional door gap mid-wall.
+	var door_h := 64.0
+	var door_y := oy + bh * 0.45
+	if randf() < 0.55:
+		_wall_rect(obstacles, ox, oy + t, t, maxf(16.0, door_y - (oy + t)), "courtyard")
+		_door_rect(obstacles, ox, door_y, t, door_h, door_id)
+		door_id -= 1
+		var west_bot := door_y + door_h
+		_wall_rect(obstacles, ox, west_bot, t, maxf(16.0, (oy + bh - t) - west_bot), "courtyard")
+	else:
+		_wall_rect(obstacles, ox, oy + t, t, bh - t * 2.0, "courtyard")
+	_wall_rect(obstacles, ox + bw - t, oy + t, t, bh - t * 2.0, "courtyard")
+	# Partial south lips so the open mouth still reads as a courtyard.
+	var lip := bw * 0.28
+	_wall_rect(obstacles, ox, oy + bh - t, lip, t, "courtyard")
+	_wall_rect(obstacles, ox + bw - lip, oy + bh - t, lip, t, "courtyard")
+	# Interior yard props near edges.
+	obstacles.append({
+		"x": ox + t + 30.0, "y": oy + t + 24.0, "w": 50.0, "h": 36.0,
+		"style": "prop", "kind": "solid",
+	})
+	obstacles.append({
+		"x": ox + bw - t - 70.0, "y": oy + t + 30.0, "w": 44.0, "h": 50.0,
+		"style": "prop", "kind": "solid",
+	})
+	return door_id
+
+
+## Thick walls, single door, denser interior props (high-value room).
+static func _append_bunker(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
+	var t := 40.0
+	var ox := origin.x
+	var oy := origin.y
+	_wall_rect(obstacles, ox, oy, bw, t, "bunker")
+	_wall_rect(obstacles, ox, oy + bh - t, bw, t, "bunker")
+	_wall_rect(obstacles, ox, oy + t, t, bh - t * 2.0, "bunker")
+	var door_h := 62.0
 	var door_y := oy + (bh - door_h) * 0.5
 	var east_x := ox + bw - t
-	var top_h := maxf(24.0, door_y - (oy + t))
+	var top_h := maxf(18.0, door_y - (oy + t))
 	var bot_y := door_y + door_h
-	var bot_h := maxf(24.0, (oy + bh - t) - bot_y)
-	obstacles.append({"x": east_x, "y": oy + t, "w": t, "h": top_h, "style": "building", "kind": "solid"})
-	obstacles.append({"x": east_x, "y": bot_y, "w": t, "h": bot_h, "style": "building", "kind": "solid"})
+	var bot_h := maxf(18.0, (oy + bh - t) - bot_y)
+	_wall_rect(obstacles, east_x, oy + t, t, top_h, "bunker")
+	_wall_rect(obstacles, east_x, bot_y, t, bot_h, "bunker")
+	_door_rect(obstacles, east_x, door_y, t, door_h, door_id)
+	# Dense interior — desks / racks.
 	obstacles.append({
-		"x": east_x, "y": door_y, "w": t, "h": door_h,
-		"kind": "door", "open": false, "id": door_id, "style": "door",
+		"x": ox + t + 16.0, "y": oy + t + 16.0, "w": 52.0, "h": 40.0,
+		"style": "prop", "kind": "solid",
 	})
-	# Interior clutter — desks / crates that break LOS inside.
-	if randf() < 0.7:
-		var iw := randf_range(36.0, 70.0)
-		var ih := randf_range(36.0, 70.0)
-		obstacles.append({
-			"x": ox + t + randf_range(20.0, maxf(20.0, bw - t * 2.0 - iw - 20.0)),
-			"y": oy + t + randf_range(20.0, maxf(20.0, bh - t * 2.0 - ih - 20.0)),
-			"w": iw,
-			"h": ih,
-			"style": "prop",
-			"kind": "solid",
-		})
-	if randf() < 0.45:
-		var iw2 := randf_range(24.0, 50.0)
-		var ih2 := randf_range(70.0, 120.0)
-		obstacles.append({
-			"x": ox + t + randf_range(16.0, maxf(16.0, bw - t * 2.0 - iw2 - 16.0)),
-			"y": oy + t + randf_range(16.0, maxf(16.0, bh - t * 2.0 - ih2 - 16.0)),
-			"w": iw2,
-			"h": ih2,
-			"style": "prop",
-			"kind": "solid",
-		})
+	obstacles.append({
+		"x": ox + bw * 0.45, "y": oy + bh * 0.42, "w": 40.0, "h": 56.0,
+		"style": "prop", "kind": "solid",
+	})
+	obstacles.append({
+		"x": ox + t + 20.0, "y": oy + bh - t - 50.0, "w": 60.0, "h": 32.0,
+		"style": "prop", "kind": "solid",
+	})
 	return door_id - 1
+
+
+static func _append_cover_cluster(obstacles: Array, at: Vector2, count: int) -> void:
+	for i in count:
+		var w := randf_range(28.0, 52.0)
+		var h := randf_range(24.0, 48.0)
+		var ox := at.x + randf_range(-50.0, 50.0) - w * 0.5
+		var oy := at.y + randf_range(-40.0, 40.0) - h * 0.5
+		if ox < 40.0 or oy < 40.0 or ox + w > MAP_W - 40.0 or oy + h > MAP_H - 40.0:
+			continue
+		if ox < 700.0 and oy > MAP_H - 700.0:
+			continue
+		var style := "prop"
+		if i == 0:
+			style = "wall"
+			w = randf_range(50.0, 90.0)
+			h = 22.0
+		obstacles.append({"x": ox, "y": oy, "w": w, "h": h, "style": style, "kind": "solid"})
+
+
+## Remove solids that overlap a clear disk (ingress / extract pads).
+static func _carve_clear_disk(obstacles: Array, center: Vector2, radius: float) -> void:
+	var keep: Array = []
+	for o in obstacles:
+		if String(o.get("kind", "")) == "door":
+			keep.append(o)
+			continue
+		var r := Rect2(float(o["x"]), float(o["y"]), float(o["w"]), float(o["h"]))
+		if r.get_center().distance_to(center) < radius + maxf(float(o["w"]), float(o["h"])) * 0.35:
+			continue
+		keep.append(o)
+	obstacles.clear()
+	for o2 in keep:
+		obstacles.append(o2)
+
+
+## Clear point near an anchor — falls back to global clear if jammed.
+static func _rand_near(obstacles: Array, anchor: Vector2, radius: float, body_r: float) -> Vector2:
+	for _try in 28:
+		var ang := randf() * TAU
+		var dist := randf_range(12.0, radius)
+		var p := anchor + Vector2(cos(ang), sin(ang)) * dist
+		p.x = clampf(p.x, 40.0, MAP_W - 40.0)
+		p.y = clampf(p.y, 40.0, MAP_H - 40.0)
+		if _place_away_from(obstacles, p.x, p.y, body_r):
+			return p
+	return _rand_clear_pos(obstacles, body_r, 60.0)
 
 
 static func _obstacle_blocks(o: Dictionary) -> bool:

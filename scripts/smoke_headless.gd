@@ -312,6 +312,35 @@ func _initialize() -> void:
 			and (world.get("decals", []) as Array).size() >= 8 \
 			and (world["obstacles"] as Array).size() >= 40
 	)
+	failed += _check("district map has landmarks and road spine", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var world := _RaidSim.create_raid_world(meta["loadout"])
+		var landmarks: Array = world.get("landmarks", [])
+		var districts: Array = world.get("districts", [])
+		var road_n := 0
+		for d in world.get("decals", []):
+			if String(d.get("style", "")) == "road":
+				road_n += 1
+		var styles := {}
+		for o in world["obstacles"]:
+			styles[String(o.get("style", ""))] = true
+		var has_prefabs := styles.has("shed") and styles.has("warehouse") \
+			and styles.has("courtyard") and styles.has("bunker")
+		return landmarks.size() >= 8 and districts.size() >= 6 and road_n >= 4 and has_prefabs
+	)
+	failed += _check("ingress and extracts stay clear of solids", func() -> bool:
+		var meta := _MetaSim.create_meta_state()
+		var world := _RaidSim.create_raid_world(meta["loadout"])
+		var obstacles: Array = world["obstacles"]
+		var ingress: Vector2 = world["player"]["pos"]
+		if not _RaidSim._place_away_from(obstacles, ingress.x, ingress.y, 20.0):
+			return false
+		for z in world["extracts"]:
+			var zp: Vector2 = z["pos"]
+			if not _RaidSim._place_away_from(obstacles, zp.x, zp.y, 22.0):
+				return false
+		return true
+	)
 	failed += _check("vision blocked by wall", func() -> bool:
 		var obstacles: Array = [{"x": 100.0, "y": 0.0, "w": 40.0, "h": 200.0}]
 		var viewer := {"pos": Vector2(50, 100), "vision_range": 500.0}

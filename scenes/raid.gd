@@ -535,6 +535,23 @@ func _draw() -> void:
 		col.a = alpha
 		draw_string(ThemeDB.fallback_font, f["pos"], String(f["text"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
 
+	# Landmark labels — short names only when in vision (no HUD spam).
+	if bool(player["alive"]):
+		for lm in world.get("landmarks", []):
+			var kind := String(lm.get("kind", ""))
+			if kind == "district":
+				continue
+			var lp: Vector2 = lm["pos"]
+			if not RaidSim.can_see_actor(player, lp, obstacles):
+				continue
+			if player["pos"].distance_to(lp) > 520.0:
+				continue
+			var label := String(lm.get("name", ""))
+			if label.is_empty():
+				continue
+			var tw := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+			draw_string(ThemeDB.fallback_font, lp + Vector2(-tw * 0.5, -28.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.85, 0.9, 0.95, 0.7))
+
 	# Field dusk wash — late raids cool and darken without hiding the HUD.
 	var dusk_draw := float(world.get("dusk_01", 0.0))
 	if dusk_draw > 0.02:
@@ -596,22 +613,37 @@ func _draw_extract_pad(z: Dictionary, player: Dictionary) -> void:
 
 func _draw_decal(d: Dictionary) -> void:
 	var r := Rect2(float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"]))
+	var style := String(d.get("style", "dirt"))
+	var theme := String(d.get("theme", ""))
 	var fill := Color(0.22, 0.28, 0.24, 0.35)
-	match String(d.get("style", "dirt")):
+	match style:
 		"asphalt":
-			fill = Color(0.18, 0.2, 0.24, 0.55)
+			fill = Color(0.18, 0.22, 0.28, 0.55)  # warehouse grey-blue
 		"road":
 			fill = Color(0.16, 0.18, 0.22, 0.72)
 		"yard":
-			fill = Color(0.22, 0.34, 0.24, 0.42)
+			fill = Color(0.2, 0.36, 0.24, 0.45)  # yard green
 		"gravel":
-			fill = Color(0.32, 0.3, 0.26, 0.4)
+			fill = Color(0.38, 0.3, 0.18, 0.42)  # extract amber grit
 		"pad":
 			fill = Color(0.28, 0.3, 0.34, 0.5)
 		_:
-			fill = Color(0.3, 0.26, 0.2, 0.38)
+			fill = Color(0.34, 0.26, 0.18, 0.4)  # ruins brown
+	# District theme override when style is a wash (not asphalt road lines).
+	if style != "road":
+		match theme:
+			"yard":
+				fill = Color(0.2, 0.36, 0.24, 0.42)
+			"warehouse":
+				fill = Color(0.18, 0.24, 0.3, 0.48)
+			"ruins":
+				fill = Color(0.34, 0.26, 0.18, 0.4)
+			"extract":
+				fill = Color(0.4, 0.32, 0.16, 0.38)
+			"ingress":
+				fill = Color(0.26, 0.32, 0.36, 0.48)
 	draw_rect(r, fill)
-	if String(d.get("style", "")) == "road":
+	if style == "road":
 		# Center dashed stripe.
 		var mid_y := r.position.y + r.size.y * 0.5
 		if r.size.x > r.size.y:
@@ -644,11 +676,29 @@ func _draw_obstacle(o: Dictionary) -> void:
 	var fill := Color(0.28, 0.34, 0.42, 1)
 	var edge := Color(0.14, 0.18, 0.24, 1)
 	var accent := Color(0.4, 0.48, 0.55, 0.35)
+	var edge_w := 1.5
 	match style:
-		"building":
-			fill = Color(0.32, 0.38, 0.48, 1)
+		"building", "shed":
+			fill = Color(0.34, 0.4, 0.48, 1)
 			edge = Color(0.18, 0.22, 0.3, 1)
 			accent = Color(0.55, 0.62, 0.72, 0.25)
+		"warehouse":
+			fill = Color(0.28, 0.36, 0.46, 1)
+			edge = Color(0.14, 0.2, 0.28, 1)
+			accent = Color(0.5, 0.65, 0.78, 0.28)
+		"courtyard":
+			fill = Color(0.36, 0.4, 0.34, 1)
+			edge = Color(0.2, 0.24, 0.18, 1)
+			accent = Color(0.55, 0.65, 0.45, 0.28)
+		"bunker":
+			fill = Color(0.22, 0.26, 0.3, 1)
+			edge = Color(0.1, 0.12, 0.14, 1)
+			accent = Color(0.45, 0.5, 0.55, 0.3)
+			edge_w = 3.0  # thick bunker read
+		"column":
+			fill = Color(0.4, 0.42, 0.48, 1)
+			edge = Color(0.2, 0.22, 0.28, 1)
+			accent = Color(0.7, 0.72, 0.78, 0.4)
 		"wall":
 			fill = Color(0.26, 0.3, 0.38, 1)
 			edge = Color(0.12, 0.15, 0.2, 1)
@@ -662,7 +712,7 @@ func _draw_obstacle(o: Dictionary) -> void:
 			edge = Color(0.16, 0.17, 0.16, 1)
 			accent = Color(0.5, 0.42, 0.3, 0.22)
 	draw_rect(r, fill)
-	draw_rect(r, edge, false, 1.5)
+	draw_rect(r, edge, false, edge_w)
 	# Inner bevel / stripe so solids aren't flat slabs.
 	if r.size.x > 40.0 and r.size.y > 40.0:
 		draw_rect(Rect2(r.position + Vector2(4, 4), r.size - Vector2(8, 8)), accent, false, 1.0)
@@ -671,16 +721,25 @@ func _draw_obstacle(o: Dictionary) -> void:
 	else:
 		draw_line(r.position + Vector2(3, r.size.y * 0.4), r.position + Vector2(r.size.x - 3, r.size.y * 0.4), accent, 2.0)
 	# Building windows — tiny lit slits so compounds feel inhabited.
-	if style == "building" and r.size.x >= 80.0 and r.size.y <= 40.0:
+	var is_build := style in ["building", "shed", "warehouse", "bunker", "courtyard"]
+	if is_build and r.size.x >= 80.0 and r.size.y <= 48.0:
 		var wx := r.position.x + 14.0
+		var win_col := Color(0.75, 0.85, 0.95, 0.22)
+		if style == "bunker":
+			win_col = Color(0.55, 0.7, 0.55, 0.18)
 		while wx < r.end.x - 14.0:
-			draw_rect(Rect2(wx, r.position.y + 6.0, 8.0, 10.0), Color(0.75, 0.85, 0.95, 0.22))
+			draw_rect(Rect2(wx, r.position.y + 6.0, 8.0, 10.0), win_col)
 			wx += 22.0
-	elif style == "building" and r.size.y >= 80.0 and r.size.x <= 40.0:
+	elif is_build and r.size.y >= 80.0 and r.size.x <= 48.0:
 		var wy := r.position.y + 14.0
 		while wy < r.end.y - 14.0:
 			draw_rect(Rect2(r.position.x + 6.0, wy, 10.0, 8.0), Color(0.75, 0.85, 0.95, 0.22))
 			wy += 22.0
+	# Warehouse columns get a bolt cross so they read as supports.
+	if style == "column":
+		var c := r.get_center()
+		draw_line(c + Vector2(-8, 0), c + Vector2(8, 0), accent, 2.0)
+		draw_line(c + Vector2(0, -8), c + Vector2(0, 8), accent, 2.0)
 
 
 func _draw_loot_container(c: Dictionary, cp: Vector2) -> void:
@@ -775,22 +834,59 @@ func _draw_minimap() -> void:
 	minimap.draw_rect(Rect2(Vector2.ZERO, minimap.size), Color(0.04, 0.06, 0.08, 0.9))
 	var sx := w / float(world["width"])
 	var sy := h / float(world["height"])
-	# Road / pad washes first so the compound skeleton reads.
+	# Subtle district tint under the road spine.
+	for dist in world.get("districts", []):
+		var theme := String(dist.get("theme", ""))
+		var tcol := Color(0.15, 0.18, 0.2, 0.2)
+		match theme:
+			"yard":
+				tcol = Color(0.12, 0.28, 0.16, 0.22)
+			"warehouse":
+				tcol = Color(0.12, 0.18, 0.28, 0.22)
+			"ruins":
+				tcol = Color(0.28, 0.18, 0.1, 0.2)
+			"extract":
+				tcol = Color(0.3, 0.22, 0.1, 0.2)
+			"ingress":
+				tcol = Color(0.14, 0.2, 0.24, 0.25)
+		var tr := Rect2(float(dist["x"]) * sx, float(dist["y"]) * sy, maxf(1.0, float(dist["w"]) * sx), maxf(1.0, float(dist["h"]) * sy))
+		minimap.draw_rect(tr, tcol)
+	# Road / pad washes so the compound skeleton reads.
 	for d in world.get("decals", []):
 		var style := String(d.get("style", ""))
 		if style != "road" and style != "pad":
 			continue
 		var dr := Rect2(float(d["x"]) * sx, float(d["y"]) * sy, maxf(1.0, float(d["w"]) * sx), maxf(1.0, float(d["h"]) * sy))
-		minimap.draw_rect(dr, Color(0.22, 0.24, 0.28, 0.45) if style == "road" else Color(0.2, 0.26, 0.3, 0.35))
+		minimap.draw_rect(dr, Color(0.28, 0.3, 0.34, 0.55) if style == "road" else Color(0.2, 0.26, 0.3, 0.35))
 	# Faint obstacle blobs for orientation.
 	for o in world["obstacles"]:
 		var r := Rect2(float(o["x"]) * sx, float(o["y"]) * sy, maxf(1.0, float(o["w"]) * sx), maxf(1.0, float(o["h"]) * sy))
 		var ocol := Color(0.25, 0.3, 0.36, 0.55)
+		var ost := String(o.get("style", ""))
 		if String(o.get("kind", "")) == "door":
 			ocol = Color(0.7, 0.5, 0.25, 0.7)
-		elif String(o.get("style", "")) == "building":
+		elif ost in ["building", "shed", "warehouse", "courtyard", "bunker"]:
 			ocol = Color(0.32, 0.4, 0.5, 0.65)
+			if ost == "bunker":
+				ocol = Color(0.22, 0.28, 0.34, 0.75)
 		minimap.draw_rect(r, ocol)
+	# Landmark dots (buildings / extracts — skip district centers).
+	for lm in world.get("landmarks", []):
+		var k := String(lm.get("kind", ""))
+		if k == "district":
+			continue
+		var lp: Vector2 = lm["pos"]
+		var lcol := Color(0.75, 0.8, 0.85, 0.55)
+		match k:
+			"warehouse":
+				lcol = Color(0.45, 0.7, 0.9, 0.7)
+			"bunker":
+				lcol = Color(0.85, 0.55, 0.35, 0.75)
+			"courtyard":
+				lcol = Color(0.45, 0.8, 0.5, 0.65)
+			"extract":
+				lcol = Color(0.9, 0.75, 0.35, 0.5)
+		minimap.draw_circle(Vector2(lp.x * sx, lp.y * sy), 1.6 if k != "extract" else 1.2, lcol)
 	for z in world["extracts"]:
 		var zp: Vector2 = z["pos"]
 		var is_active := bool(world.get("extract_alarm", false)) and int(world.get("active_extract_id", -1)) == int(z["id"])
