@@ -8,11 +8,11 @@ const Skills := preload("res://scripts/systems/skills.gd")
 const MetaSim := preload("res://scripts/systems/meta.gd")
 const RaidRoamers := preload("res://scripts/systems/raid_roamers.gd")
 
-const MAP_W := 4800.0
-const MAP_H := 3200.0
-const VISION_RANGE := 420.0
+const MAP_W := 7200.0
+const MAP_H := 4800.0
+const VISION_RANGE := 440.0
 ## How far roamers hear an active extract flare and rush the exit.
-const EXTRACT_ALARM_RADIUS := 1200.0
+const EXTRACT_ALARM_RADIUS := 1400.0
 ## Damage while holding extract bleeds progress (seconds lost per HP).
 const EXTRACT_DAMAGE_PROGRESS_BLEED := 0.045
 ## Field medkit channel time — interrupted if you take damage.
@@ -148,6 +148,8 @@ const LOOT_CHANNEL_AMMO := 1.35
 const LOOT_CHANNEL_MED := 1.5
 const LOOT_CHANNEL_WEAPON := 2.35
 const LOOT_CHANNEL_INTEL := 2.1
+## Loose ground piles — quick grab so the field feels littered, not only boxed.
+const LOOT_CHANNEL_GROUND := 0.85
 const HEAR_RANSACK_RANGE := 400.0
 ## Scrap toss — throw junk ahead to pull roamers off you.
 const HEAR_DISTRACT_RANGE := 540.0
@@ -341,11 +343,14 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		"threat_ttl": 0.0,
 		"dusk_01": 0.0,
 		"dusk_warned": false,
+		"decals": [],
 	}
 
-	world["obstacles"] = _build_obstacles()
+	var field := _build_field()
+	world["obstacles"] = field["obstacles"]
+	world["decals"] = field["decals"]
 
-	world["player"] = _make_actor(world, "player", Vector2(240, MAP_H - 240), {
+	world["player"] = _make_actor(world, "player", Vector2(280, MAP_H - 280), {
 		"hp": 100.0,
 		"max_hp": 100.0,
 		"speed": 175.0,
@@ -407,9 +412,9 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 		Items.add_to_stash(world["inventory"], Items.stack_of("medkit", pack))
 		_refresh_bag_cap(world)
 
-	# Spread roamers across the big map.
-	for _i in 22:
-		var sp := _rand_clear_pos(world["obstacles"], 20.0, 80.0)
+	# Spread roamers across the larger compound.
+	for _i in 34:
+		var sp := _rand_clear_pos(world["obstacles"], 20.0, 90.0)
 		world["roamers"].append(_make_actor(world, "roamer", sp, {
 			"hp": randf_range(45.0, 70.0),
 			"max_hp": 70.0,
@@ -439,37 +444,43 @@ static func create_raid_world(loadout: Dictionary, packed_medkits: int = 0, skil
 			world["roamers"].back()["ai_state"] = "dormant"
 			world["roamers"].back()["aggro_range"] = float(world["roamers"].back()["aggro_range"]) * 0.45
 
-	# Mixed container types — common crates + scarce specialty caches.
+	# Mixed containers + loose ground piles so the field reads scavenged, not empty.
 	var spawn_plan: Array = []
-	for _i in 12:
+	for _i in 20:
 		spawn_plan.append("crate")
-	for _i in 5:
+	for _i in 8:
 		spawn_plan.append("ammo_crate")
-	for _i in 4:
+	for _i in 7:
 		spawn_plan.append("med_cache")
-	for _i in 4:
+	for _i in 6:
 		spawn_plan.append("weapon_case")
-	for _i in 3:
+	for _i in 5:
 		spawn_plan.append("intel_safe")
+	for _i in 28:
+		spawn_plan.append("ground_loot")
 	spawn_plan.shuffle()
 	for kind in spawn_plan:
-		var sp := _rand_clear_pos(world["obstacles"], 18.0, 40.0)
+		var sp := _rand_clear_pos(world["obstacles"], 16.0, 50.0)
+		var is_ground := String(kind) == "ground_loot"
 		world["crates"].append({
 			"id": _alloc_id(world),
 			"pos": sp,
-			"radius": 16.0,
+			"radius": 11.0 if is_ground else 17.0,
 			"opened": false,
 			"kind": String(kind),
 			"contents": Items.roll_container_loot(String(kind)),
+			"tint": randi(),
 		})
 
 	world["extracts"] = [
 		# Hot NE — short hold, huge flare, roamers pile in hard.
-		{"id": _alloc_id(world), "pos": Vector2(MAP_W - 160, 140), "radius": 56.0, "hold_seconds": 2.1, "progress": 0.0, "active": true, "pressure": "hot", "alarm_radius": 1650.0, "contest_pad": 0.18, "bleed_mult": 1.35},
+		{"id": _alloc_id(world), "pos": Vector2(MAP_W - 180, 160), "radius": 58.0, "hold_seconds": 2.1, "progress": 0.0, "active": true, "pressure": "hot", "alarm_radius": 1900.0, "contest_pad": 0.18, "bleed_mult": 1.35},
 		# Quiet NW — long sit, small flare — safer if you can stay still.
-		{"id": _alloc_id(world), "pos": Vector2(140, 140), "radius": 50.0, "hold_seconds": 4.2, "progress": 0.0, "active": true, "pressure": "quiet", "alarm_radius": 620.0, "contest_pad": 0.06, "bleed_mult": 0.7},
+		{"id": _alloc_id(world), "pos": Vector2(160, 160), "radius": 52.0, "hold_seconds": 4.2, "progress": 0.0, "active": true, "pressure": "quiet", "alarm_radius": 700.0, "contest_pad": 0.06, "bleed_mult": 0.7},
 		# Contested south — balanced mid pressure (classic flare).
-		{"id": _alloc_id(world), "pos": Vector2(MAP_W * 0.5, MAP_H - 140), "radius": 54.0, "hold_seconds": 2.9, "progress": 0.0, "active": true, "pressure": "contested", "alarm_radius": EXTRACT_ALARM_RADIUS, "contest_pad": 0.12, "bleed_mult": 1.0},
+		{"id": _alloc_id(world), "pos": Vector2(MAP_W * 0.5, MAP_H - 160), "radius": 56.0, "hold_seconds": 2.9, "progress": 0.0, "active": true, "pressure": "contested", "alarm_radius": EXTRACT_ALARM_RADIUS, "contest_pad": 0.12, "bleed_mult": 1.0},
+		# East mid — secondary lift for the larger compound.
+		{"id": _alloc_id(world), "pos": Vector2(MAP_W - 200, MAP_H * 0.55), "radius": 54.0, "hold_seconds": 3.3, "progress": 0.0, "active": true, "pressure": "contested", "alarm_radius": 1100.0, "contest_pad": 0.1, "bleed_mult": 0.95},
 	]
 	# One Warden per extract — tougher elites that hold the exits.
 	for z in world["extracts"]:
@@ -1370,6 +1381,8 @@ static func _loot_channel_for_kind(kind: String) -> float:
 			return LOOT_CHANNEL_WEAPON
 		"intel_safe":
 			return LOOT_CHANNEL_INTEL
+		"ground_loot":
+			return LOOT_CHANNEL_GROUND
 		_:
 			return LOOT_CHANNEL_CRATE
 
@@ -1508,11 +1521,18 @@ static func _begin_loot(world: Dictionary) -> void:
 			label = "Opening med cache…"
 		"ammo_crate":
 			label = "Breaking ammo crate…"
+		"ground_loot":
+			label = "Scooping loot…"
 		_:
 			label = "Prying crate…"
-	_set_message(world, "%s stay close — this is loud." % label, dur + 0.3)
-	_push_float(world, nearest["pos"], "RANSACK", Color("e6b35a"), 0.9)
-	_emit_noise(world, player["pos"], HEAR_RANSACK_RANGE, 0.5)
+	if kind == "ground_loot":
+		_set_message(world, "%s stay close." % label, dur + 0.2)
+		_push_float(world, nearest["pos"], "SCOOP", Color("d2b48c"), 0.7)
+		_emit_noise(world, player["pos"], HEAR_RANSACK_RANGE * 0.45, 0.35)
+	else:
+		_set_message(world, "%s stay close — this is loud." % label, dur + 0.3)
+		_push_float(world, nearest["pos"], "RANSACK", Color("e6b35a"), 0.9)
+		_emit_noise(world, player["pos"], HEAR_RANSACK_RANGE, 0.5)
 
 
 static func _tick_loot_channel(world: Dictionary, dt: float, move: Vector2, aim_world: Vector2, crouch: bool = false) -> void:
@@ -1637,6 +1657,8 @@ static func _finish_loot(world: Dictionary, nearest: Dictionary) -> void:
 		verb = "Looted med cache"
 	elif kind == "ammo_crate":
 		verb = "Broke ammo crate"
+	elif kind == "ground_loot":
+		verb = "Scooped loot"
 	else:
 		verb = "Cracked crate"
 	if ammo_gained > 0 and taken == int(ceil(float(ammo_gained) / 30.0)) and blocked == 0 and taken_names.size() == 1:
@@ -2063,44 +2085,161 @@ static func _wear_armor(world: Dictionary, absorbed: float, base_mit: float) -> 
 		_push_float(world, player["pos"], "ARMOR CRACKED", Color("e6b35a"), 1.0)
 
 
-static func _build_obstacles() -> Array:
+## Procedural compound — buildings, rubble, props, plus paint-only ground decals.
+static func _build_field() -> Dictionary:
 	var obstacles: Array = []
-	# Outer rubble rings + interior blocks for a larger compound feel.
-	var seeds: Array = [
-		Vector2(600, 400), Vector2(1400, 700), Vector2(2200, 500), Vector2(3200, 900),
-		Vector2(4000, 600), Vector2(900, 1500), Vector2(1800, 1600), Vector2(2800, 1400),
-		Vector2(3700, 1700), Vector2(700, 2400), Vector2(1600, 2500), Vector2(2500, 2300),
-		Vector2(3400, 2500), Vector2(4200, 2200), Vector2(1200, 1100), Vector2(3000, 400),
-		Vector2(450, 900), Vector2(2100, 2100), Vector2(3900, 1200), Vector2(500, 2800),
+	var decals: Array = []
+	var door_id := -200
+
+	# Soft ground washes so the field isn't one flat slab.
+	for _i in 18:
+		var dw := randf_range(280.0, 720.0)
+		var dh := randf_range(220.0, 560.0)
+		decals.append({
+			"x": randf_range(80.0, MAP_W - dw - 80.0),
+			"y": randf_range(80.0, MAP_H - dh - 80.0),
+			"w": dw,
+			"h": dh,
+			"style": ["dirt", "asphalt", "yard", "gravel"][randi() % 4],
+		})
+
+	# Road strips — long asphalt corridors between clusters.
+	for _i in 4:
+		var horizontal := randf() < 0.5
+		if horizontal:
+			var y := randf_range(400.0, MAP_H - 400.0)
+			var h := randf_range(70.0, 110.0)
+			decals.append({"x": 120.0, "y": y, "w": MAP_W - 240.0, "h": h, "style": "road"})
+		else:
+			var x := randf_range(400.0, MAP_W - 400.0)
+			var w := randf_range(70.0, 110.0)
+			decals.append({"x": x, "y": 120.0, "w": w, "h": MAP_H - 240.0, "style": "road"})
+
+	# Building clusters — each gets walls, a door, and yard pad.
+	var hubs: Array = [
+		Vector2(900, 700), Vector2(2200, 900), Vector2(3600, 650), Vector2(5200, 800),
+		Vector2(6400, 1200), Vector2(1100, 2000), Vector2(2800, 2100), Vector2(4500, 1900),
+		Vector2(6000, 2300), Vector2(800, 3400), Vector2(2400, 3600), Vector2(4000, 3400),
+		Vector2(5600, 3600), Vector2(6800, 3000), Vector2(1600, 2800), Vector2(3200, 1400),
+		Vector2(4800, 2800), Vector2(700, 1400), Vector2(5000, 1200), Vector2(6200, 4000),
 	]
-	for s in seeds:
-		var w := randf_range(60.0, 220.0)
-		var h := randf_range(40.0, 180.0)
-		if randf() < 0.45:
-			w = randf_range(36.0, 70.0)
-			h = randf_range(120.0, 280.0)
+	hubs.shuffle()
+	var building_count := 12 + randi() % 5
+	for i in building_count:
+		var hub: Vector2 = hubs[i % hubs.size()]
+		hub += Vector2(randf_range(-140, 140), randf_range(-120, 120))
+		var bw := randf_range(220.0, 420.0)
+		var bh := randf_range(180.0, 360.0)
+		hub.x = clampf(hub.x, 120.0, MAP_W - bw - 120.0)
+		hub.y = clampf(hub.y, 120.0, MAP_H - bh - 120.0)
+		decals.append({
+			"x": hub.x - 30.0, "y": hub.y - 30.0,
+			"w": bw + 60.0, "h": bh + 60.0,
+			"style": "pad",
+		})
+		door_id = _append_building(obstacles, hub, bw, bh, door_id)
+
+	# Standalone rubble / crates piles / shipping walls for LOS breakers.
+	for _i in 48:
+		var w := randf_range(40.0, 180.0)
+		var h := randf_range(36.0, 160.0)
+		var tall := randf() < 0.4
+		if tall:
+			w = randf_range(28.0, 55.0)
+			h = randf_range(140.0, 320.0)
+		elif randf() < 0.25:
+			w = randf_range(140.0, 280.0)
+			h = randf_range(28.0, 48.0)
+		var style := "rubble"
+		if tall:
+			style = "wall"
+		elif randf() < 0.35:
+			style = "prop"
 		obstacles.append({
-			"x": clampf(s.x + randf_range(-80, 80), 40.0, MAP_W - w - 40.0),
-			"y": clampf(s.y + randf_range(-80, 80), 40.0, MAP_H - h - 40.0),
+			"x": randf_range(60.0, MAP_W - w - 60.0),
+			"y": randf_range(60.0, MAP_H - h - 60.0),
 			"w": w,
 			"h": h,
+			"style": style,
+			"kind": "solid",
 		})
-	# A few long walls / corridors.
-	obstacles.append_array([
-		{"x": 1100.0, "y": 200.0, "w": 40.0, "h": 700.0},
-		{"x": 2500.0, "y": 900.0, "w": 800.0, "h": 40.0},
-		{"x": 3300.0, "y": 1400.0, "w": 40.0, "h": 900.0},
-		{"x": 800.0, "y": 2000.0, "w": 900.0, "h": 40.0},
-	])
-	# Breached corridor doors — closed by default, E toggles.
-	obstacles.append_array([
-		{"x": 1100.0, "y": 900.0, "w": 40.0, "h": 70.0, "kind": "door", "open": false, "id": -101},
-		{"x": 2460.0, "y": 900.0, "w": 70.0, "h": 40.0, "kind": "door", "open": false, "id": -102},
-		{"x": 3300.0, "y": 2300.0, "w": 40.0, "h": 70.0, "kind": "door", "open": false, "id": -103},
-		{"x": 1200.0, "y": 2000.0, "w": 70.0, "h": 40.0, "kind": "door", "open": false, "id": -104},
-		{"x": 2800.0, "y": 1400.0, "w": 40.0, "h": 70.0, "kind": "door", "open": false, "id": -105},
-	])
-	return obstacles
+
+	# Extra freestanding doors on a few corridor walls.
+	for _i in 6:
+		var vertical := randf() < 0.5
+		if vertical:
+			obstacles.append({
+				"x": randf_range(200.0, MAP_W - 200.0),
+				"y": randf_range(200.0, MAP_H - 200.0),
+				"w": 40.0,
+				"h": 72.0,
+				"kind": "door",
+				"open": false,
+				"id": door_id,
+				"style": "door",
+			})
+		else:
+			obstacles.append({
+				"x": randf_range(200.0, MAP_W - 200.0),
+				"y": randf_range(200.0, MAP_H - 200.0),
+				"w": 72.0,
+				"h": 40.0,
+				"kind": "door",
+				"open": false,
+				"id": door_id,
+				"style": "door",
+			})
+		door_id -= 1
+
+	return {"obstacles": obstacles, "decals": decals}
+
+
+## Four-wall footprint with one door gap — reads as a room you can clear.
+static func _append_building(obstacles: Array, origin: Vector2, bw: float, bh: float, door_id: int) -> int:
+	var t := 28.0
+	var ox := origin.x
+	var oy := origin.y
+	# North / south long walls.
+	obstacles.append({"x": ox, "y": oy, "w": bw, "h": t, "style": "building", "kind": "solid"})
+	obstacles.append({"x": ox, "y": oy + bh - t, "w": bw, "h": t, "style": "building", "kind": "solid"})
+	# West wall full; east wall split around a door.
+	obstacles.append({"x": ox, "y": oy + t, "w": t, "h": bh - t * 2.0, "style": "building", "kind": "solid"})
+	var door_h := 70.0
+	var door_y := oy + (bh - door_h) * 0.5
+	var east_x := ox + bw - t
+	var top_h := maxf(24.0, door_y - (oy + t))
+	var bot_y := door_y + door_h
+	var bot_h := maxf(24.0, (oy + bh - t) - bot_y)
+	obstacles.append({"x": east_x, "y": oy + t, "w": t, "h": top_h, "style": "building", "kind": "solid"})
+	obstacles.append({"x": east_x, "y": bot_y, "w": t, "h": bot_h, "style": "building", "kind": "solid"})
+	obstacles.append({
+		"x": east_x, "y": door_y, "w": t, "h": door_h,
+		"kind": "door", "open": false, "id": door_id, "style": "door",
+	})
+	# Interior clutter — desks / crates that break LOS inside.
+	if randf() < 0.7:
+		var iw := randf_range(36.0, 70.0)
+		var ih := randf_range(36.0, 70.0)
+		obstacles.append({
+			"x": ox + t + randf_range(20.0, maxf(20.0, bw - t * 2.0 - iw - 20.0)),
+			"y": oy + t + randf_range(20.0, maxf(20.0, bh - t * 2.0 - ih - 20.0)),
+			"w": iw,
+			"h": ih,
+			"style": "prop",
+			"kind": "solid",
+		})
+	if randf() < 0.45:
+		var iw2 := randf_range(24.0, 50.0)
+		var ih2 := randf_range(70.0, 120.0)
+		obstacles.append({
+			"x": ox + t + randf_range(16.0, maxf(16.0, bw - t * 2.0 - iw2 - 16.0)),
+			"y": oy + t + randf_range(16.0, maxf(16.0, bh - t * 2.0 - ih2 - 16.0)),
+			"w": iw2,
+			"h": ih2,
+			"style": "prop",
+			"kind": "solid",
+		})
+	return door_id - 1
 
 
 static func _obstacle_blocks(o: Dictionary) -> bool:
@@ -2364,6 +2503,8 @@ static func _refresh_interact_hint(world: Dictionary) -> void:
 				world["interact_hint"] = "E  pick"
 			"med_cache", "ammo_crate":
 				world["interact_hint"] = "E  open"
+			"ground_loot":
+				world["interact_hint"] = "E  scoop"
 			_:
 				world["interact_hint"] = "E  pry"
 		return

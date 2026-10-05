@@ -219,65 +219,88 @@ static func roll_crate_loot() -> Array:
 static func roll_container_loot(kind: String) -> Array:
 	var out: Array = []
 	match kind:
+		"ground_loot":
+			# Single visible pile — quick grab, still can be a lucky find.
+			out.append(stack_of(_pick_weighted([
+				{"id": "scrap", "w": 5.5},
+				{"id": "ammo_box", "w": 2.8},
+				{"id": "medkit", "w": 1.4},
+				{"id": "mark_flare", "w": 1.0},
+				{"id": "gold_watch", "w": 0.55},
+				{"id": "intel", "w": 0.35},
+				{"id": "field_pistol", "w": 0.3},
+			]), randi_range(1, 2)))
+			if randf() < 0.12:
+				out.append(stack_of("scrap", 1))
 		"med_cache":
-			out.append(stack_of("medkit", randi_range(1, 2)))
-			if randf() < 0.45:
-				out.append(stack_of(_pick_weighted([
-					{"id": "scrap", "w": 3.0}, {"id": "medkit", "w": 2.0}, {"id": "ammo_box", "w": 1.0},
-				]), 1))
-		"ammo_crate":
-			out.append(stack_of("ammo_box", randi_range(1, 2)))
+			out.append(stack_of("medkit", randi_range(1, 3)))
 			if randf() < 0.55:
 				out.append(stack_of(_pick_weighted([
-					{"id": "ammo_box", "w": 4.0}, {"id": "scrap", "w": 2.0}, {"id": "field_pistol", "w": 0.6},
+					{"id": "scrap", "w": 2.5}, {"id": "medkit", "w": 2.5}, {"id": "ammo_box", "w": 1.2}, {"id": "mark_flare", "w": 0.8},
 				]), 1))
+			if randf() < 0.2:
+				out.append(stack_of("gold_watch", 1))
+		"ammo_crate":
+			out.append(stack_of("ammo_box", randi_range(2, 3)))
+			if randf() < 0.65:
+				out.append(stack_of(_pick_weighted([
+					{"id": "ammo_box", "w": 4.0}, {"id": "scrap", "w": 2.0}, {"id": "field_pistol", "w": 0.8}, {"id": "rusty_smg", "w": 0.4},
+				]), 1))
+			if randf() < 0.18:
+				out.append(stack_of("mark_flare", 1))
 		"weapon_case":
 			out.append(stack_of(_pick_weighted([
-				{"id": "field_pistol", "w": 3.0},
-				{"id": "rusty_smg", "w": 2.2},
-				{"id": "coil_carbine", "w": 1.4},
-				{"id": "patrol_rifle", "w": 1.0},
+				{"id": "field_pistol", "w": 2.6},
+				{"id": "rusty_smg", "w": 2.4},
+				{"id": "coil_carbine", "w": 1.8},
+				{"id": "patrol_rifle", "w": 1.4},
 				{"id": "cloth_armor", "w": 1.2},
-				{"id": "mesh_carrier", "w": 1.0},
-				{"id": "plate_vest", "w": 0.8},
-				{"id": "field_pack", "w": 0.7},
+				{"id": "mesh_carrier", "w": 1.2},
+				{"id": "plate_vest", "w": 1.0},
+				{"id": "field_pack", "w": 0.9},
+				{"id": "sling_bag", "w": 0.7},
+			]), 1))
+			if randf() < 0.7:
+				out.append(stack_of(_pick_weighted([
+					{"id": "ammo_box", "w": 3.5}, {"id": "scrap", "w": 1.8}, {"id": "medkit", "w": 1.2}, {"id": "mark_flare", "w": 1.4},
+				]), 1))
+			if randf() < 0.25:
+				out.append(stack_of("ammo_box", randi_range(1, 2)))
+		"intel_safe":
+			out.append(stack_of(_pick_weighted([
+				{"id": "intel", "w": 4.5}, {"id": "gold_watch", "w": 2.8}, {"id": "scrap", "w": 1.0}, {"id": "mark_flare", "w": 1.2},
 			]), 1))
 			if randf() < 0.55:
 				out.append(stack_of(_pick_weighted([
-					{"id": "ammo_box", "w": 3.0}, {"id": "scrap", "w": 2.0}, {"id": "medkit", "w": 1.0}, {"id": "mark_flare", "w": 1.2},
+					{"id": "gold_watch", "w": 2.2}, {"id": "intel", "w": 2.4}, {"id": "medkit", "w": 1.0}, {"id": "ammo_box", "w": 0.8},
 				]), 1))
-		"intel_safe":
-			out.append(stack_of(_pick_weighted([
-				{"id": "intel", "w": 4.0}, {"id": "gold_watch", "w": 2.5}, {"id": "scrap", "w": 1.0}, {"id": "mark_flare", "w": 1.0},
-			]), 1))
-			if randf() < 0.4:
-				out.append(stack_of(_pick_weighted([
-					{"id": "gold_watch", "w": 2.0}, {"id": "intel", "w": 2.0}, {"id": "medkit", "w": 1.0},
-				]), 1))
+			if randf() < 0.2:
+				out.append(stack_of("field_pack", 1))
 		_:
-			# Common field crate — scrap-heavy with rare jackpot chance.
-			var count := int(randi_range(1, 3))
+			# Common field crate — scrap-heavy with better mid-tier odds.
+			var count := int(randi_range(2, 4))
 			for _i in count:
 				out.append(stack_of(_pick_weighted([
-					{"id": "scrap", "w": 5.0},
-					{"id": "ammo_box", "w": 2.5},
-					{"id": "medkit", "w": 1.2},
-					{"id": "mark_flare", "w": 0.8},
-					{"id": "intel", "w": 0.5},
-					{"id": "gold_watch", "w": 0.35},
-					{"id": "field_pistol", "w": 0.4},
-					{"id": "cloth_armor", "w": 0.3},
-					{"id": "sling_bag", "w": 0.25},
+					{"id": "scrap", "w": 4.5},
+					{"id": "ammo_box", "w": 2.8},
+					{"id": "medkit", "w": 1.5},
+					{"id": "mark_flare", "w": 1.0},
+					{"id": "intel", "w": 0.7},
+					{"id": "gold_watch", "w": 0.5},
+					{"id": "field_pistol", "w": 0.55},
+					{"id": "cloth_armor", "w": 0.4},
+					{"id": "sling_bag", "w": 0.35},
+					{"id": "rusty_smg", "w": 0.25},
 				]), 1))
-			if randf() < 0.08:
+			if randf() < 0.12:
 				out.append(stack_of("patrol_rifle", 1))
-			if randf() < 0.06:
+			if randf() < 0.1:
 				out.append(stack_of("coil_carbine", 1))
-			if randf() < 0.07:
+			if randf() < 0.11:
 				out.append(stack_of("plate_vest", 1))
-			if randf() < 0.06:
+			if randf() < 0.1:
 				out.append(stack_of("mesh_carrier", 1))
-			if randf() < 0.07:
+			if randf() < 0.11:
 				out.append(stack_of("field_pack", 1))
 	return out
 
@@ -345,6 +368,8 @@ static func container_display_name(kind: String) -> String:
 			return "Weapon case"
 		"intel_safe":
 			return "Intel safe"
+		"ground_loot":
+			return "Ground loot"
 		"drop_bag":
 			return "Drop bag"
 		"corpse":

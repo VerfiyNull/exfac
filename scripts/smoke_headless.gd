@@ -307,7 +307,10 @@ func _initialize() -> void:
 	failed += _check("raid world is large", func() -> bool:
 		var meta := _MetaSim.create_meta_state()
 		var world := _RaidSim.create_raid_world(meta["loadout"])
-		return float(world["width"]) >= 4000.0 and float(world["height"]) >= 3000.0 and world["roamers"].size() >= 10
+		return float(world["width"]) >= 7000.0 and float(world["height"]) >= 4500.0 \
+			and world["roamers"].size() >= 20 \
+			and (world.get("decals", []) as Array).size() >= 8 \
+			and (world["obstacles"] as Array).size() >= 40
 	)
 	failed += _check("vision blocked by wall", func() -> bool:
 		var obstacles: Array = [{"x": 100.0, "y": 0.0, "w": 40.0, "h": 200.0}]
@@ -622,11 +625,16 @@ func _initialize() -> void:
 		for c in world["crates"]:
 			var k := String(c.get("kind", "crate"))
 			kinds[k] = int(kinds.get(k, 0)) + 1
-		return int(kinds.get("crate", 0)) >= 8 \
-			and int(kinds.get("ammo_crate", 0)) >= 3 \
-			and int(kinds.get("med_cache", 0)) >= 2 \
-			and int(kinds.get("weapon_case", 0)) >= 2 \
-			and int(kinds.get("intel_safe", 0)) >= 2
+		return int(kinds.get("crate", 0)) >= 12 \
+			and int(kinds.get("ammo_crate", 0)) >= 5 \
+			and int(kinds.get("med_cache", 0)) >= 4 \
+			and int(kinds.get("weapon_case", 0)) >= 4 \
+			and int(kinds.get("intel_safe", 0)) >= 3 \
+			and int(kinds.get("ground_loot", 0)) >= 16
+	)
+	failed += _check("ground loot is a fast channel", func() -> bool:
+		return _RaidSim._loot_channel_for_kind("ground_loot") < _RaidSim._loot_channel_for_kind("crate") \
+			and not _Items.roll_container_loot("ground_loot").is_empty()
 	)
 	failed += _check("weapon case loot leans gear", func() -> bool:
 		seed(42)

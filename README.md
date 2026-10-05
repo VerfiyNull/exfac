@@ -6,11 +6,11 @@ Solo extraction shooter. **Standalone** — not UltraSim.
 |-------|--------|
 | Engine | **Godot 4.3** |
 | Window | 1280×720 |
-| Field map | **4800×3200** (camera follows you) |
+| Field map | **7200×4800** (camera follows you) |
 
 ## Run on your PC
 
-Latest on GitHub `main`: **v0.3.3** (https://github.com/VerfiyNull/exfac).
+Latest on GitHub `main`: **v0.3.4** (https://github.com/VerfiyNull/exfac).
 
 ```bat
 git clone https://github.com/VerfiyNull/exfac.git
@@ -19,7 +19,7 @@ cd exfac
 
 1. Open the **repo root** (the folder that contains `project.godot` — not a nested unzip like `exfac-main\exfac-main`).
 2. In Godot: **Project → Reload Current Project** (or close + reopen) so scripts aren't stale. Or use `launch.bat`.
-3. **F5** → title screen bottom-right should show **`v0.3.3`**. If that string is missing, you are not on this build.
+3. **F5** → title screen bottom-right should show **`v0.3.4`**. If that string is missing, you are not on this build.
 4. Punch check: HUD should read **`FISTS`** (not mag/reserve / AMMO), click-only swing, stamina cost, no shove.
 
 ## Loop

@@ -355,21 +355,25 @@ func _draw() -> void:
 	var oy := randf_range(-shake, shake) if shake > 0.0 else 0.0
 	draw_set_transform(Vector2(ox, oy), 0.0, Vector2.ONE)
 
-	draw_rect(Rect2(0, 0, world["width"], world["height"]), Color("141a22"))
+	# Base earth — slightly warmer so color washes have something to sit on.
+	draw_rect(Rect2(0, 0, world["width"], world["height"]), Color("1a222c"))
 	# Soft ground grid so the big map reads as space, not void.
 	var grid := 200.0
 	var gx0 := 0.0
 	while gx0 < float(world["width"]):
-		draw_line(Vector2(gx0, 0), Vector2(gx0, world["height"]), Color(1, 1, 1, 0.03), 1.0)
+		draw_line(Vector2(gx0, 0), Vector2(gx0, world["height"]), Color(1, 1, 1, 0.028), 1.0)
 		gx0 += grid
 	var gy0 := 0.0
 	while gy0 < float(world["height"]):
-		draw_line(Vector2(0, gy0), Vector2(world["width"], gy0), Color(1, 1, 1, 0.03), 1.0)
+		draw_line(Vector2(0, gy0), Vector2(world["width"], gy0), Color(1, 1, 1, 0.028), 1.0)
 		gy0 += grid
 
+	# Paint-only ground patches (roads, yards, pads) — no collision.
+	for d in world.get("decals", []):
+		_draw_decal(d)
+
 	for o in world["obstacles"]:
-		draw_rect(Rect2(float(o["x"]), float(o["y"]), float(o["w"]), float(o["h"])), Color("2e3848"))
-		draw_rect(Rect2(float(o["x"]), float(o["y"]), float(o["w"]), float(o["h"])), Color("1a222c"), false, 1.0)
+		_draw_obstacle(o)
 
 	var player: Dictionary = world["player"]
 	var obstacles: Array = world["obstacles"]
@@ -420,48 +424,24 @@ func _draw() -> void:
 		draw_string(ThemeDB.fallback_font, zp + Vector2(-34, 4), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ring)
 
 	for c in world["crates"]:
-		if bool(c["opened"]):
-			continue
 		var cp: Vector2 = c["pos"]
 		# Crates / corpses only render when in vision + LOS (same fog as combat reads).
 		if not RaidSim.can_see_actor(player, cp, obstacles):
 			continue
-		if String(c.get("kind", "crate")) == "corpse":
-			draw_circle(cp, 11.0, Color(0.55, 0.22, 0.22, 0.85))
-			draw_arc(cp, 11.0, 0.0, TAU, 20, Color("e85454"), 1.5)
-			draw_string(ThemeDB.fallback_font, cp + Vector2(-10, 4), "×", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("ffb0b0"))
-		elif String(c.get("kind", "crate")) == "drop_bag":
-			# Player death pouch — amber pack, critical border only.
-			draw_circle(cp, 13.0, Color(0.78, 0.55, 0.22, 0.88))
-			draw_arc(cp, 13.0, 0.0, TAU, 24, Color("e6b35a"), 2.0)
-			draw_string(ThemeDB.fallback_font, cp + Vector2(-14, 4), "BAG", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("fff0c8"))
-		else:
-			var fill := Color("e6b35a")
-			var edge := Color("8a6a30")
-			match String(c.get("kind", "crate")):
-				"ammo_crate":
-					fill = Color(0.82, 0.7, 0.45, 0.95)
-					edge = Color(0.55, 0.42, 0.22, 1)
-				"med_cache":
-					fill = Color(0.78, 0.38, 0.38, 0.92)
-					edge = Color(0.55, 0.2, 0.2, 1)
-				"weapon_case":
-					fill = Color(0.45, 0.62, 0.82, 0.95)
-					edge = Color(0.28, 0.42, 0.6, 1)
-				"intel_safe":
-					fill = Color(0.42, 0.72, 0.82, 0.95)
-					edge = Color(0.22, 0.48, 0.58, 1)
-			draw_rect(Rect2(cp.x - 10, cp.y - 10, 20, 20), fill)
-			# Specialty caches get a critical-state border; common crates stay wash-only.
-			if String(c.get("kind", "crate")) != "crate":
-				draw_rect(Rect2(cp.x - 10, cp.y - 10, 20, 20), edge, false, 1.5)
+		if bool(c["opened"]):
+			# Spent caches leave a pale husk so the field remembers scavenges.
+			if String(c.get("kind", "")) == "ground_loot":
+				draw_circle(cp, 4.0, Color(0.3, 0.32, 0.34, 0.45))
 			else:
-				draw_rect(Rect2(cp.x - 10, cp.y - 10, 20, 20), Color(0.54, 0.42, 0.19, 0.35), false, 1.0)
+				draw_rect(Rect2(cp.x - 8, cp.y - 6, 16, 12), Color(0.25, 0.28, 0.32, 0.55))
+				draw_rect(Rect2(cp.x - 8, cp.y - 6, 16, 12), Color(0.15, 0.17, 0.2, 0.7), false, 1.0)
+			continue
+		_draw_loot_container(c, cp)
 		# Ransack progress on the active target.
 		if int(player.get("loot_target_id", -1)) == int(c["id"]) and float(player.get("loot_channel", 0.0)) > 0.0:
 			var max_c := maxf(0.2, float(player.get("loot_channel_max", 1.0)))
 			var pct := 1.0 - clampf(float(player["loot_channel"]) / max_c, 0.0, 1.0)
-			draw_arc(cp, 18.0, -PI * 0.5, -PI * 0.5 + TAU * pct, 36, Color("e6b35a"), 3.5)
+			draw_arc(cp, 20.0, -PI * 0.5, -PI * 0.5 + TAU * pct, 36, Color("e6b35a"), 3.5)
 
 	for roamer in world["roamers"]:
 		if not bool(roamer["alive"]):
@@ -577,6 +557,155 @@ func _draw() -> void:
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
+func _draw_decal(d: Dictionary) -> void:
+	var r := Rect2(float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"]))
+	var fill := Color(0.22, 0.28, 0.24, 0.35)
+	match String(d.get("style", "dirt")):
+		"asphalt":
+			fill = Color(0.18, 0.2, 0.24, 0.55)
+		"road":
+			fill = Color(0.16, 0.18, 0.22, 0.72)
+		"yard":
+			fill = Color(0.22, 0.34, 0.24, 0.42)
+		"gravel":
+			fill = Color(0.32, 0.3, 0.26, 0.4)
+		"pad":
+			fill = Color(0.28, 0.3, 0.34, 0.5)
+		_:
+			fill = Color(0.3, 0.26, 0.2, 0.38)
+	draw_rect(r, fill)
+	if String(d.get("style", "")) == "road":
+		# Center dashed stripe.
+		var mid_y := r.position.y + r.size.y * 0.5
+		if r.size.x > r.size.y:
+			var x := r.position.x + 20.0
+			while x < r.end.x - 20.0:
+				draw_line(Vector2(x, mid_y), Vector2(mini(x + 28.0, r.end.x - 12.0), mid_y), Color(0.85, 0.75, 0.35, 0.35), 2.0)
+				x += 52.0
+		else:
+			var mid_x := r.position.x + r.size.x * 0.5
+			var y := r.position.y + 20.0
+			while y < r.end.y - 20.0:
+				draw_line(Vector2(mid_x, y), Vector2(mid_x, mini(y + 28.0, r.end.y - 12.0)), Color(0.85, 0.75, 0.35, 0.35), 2.0)
+				y += 52.0
+
+
+func _draw_obstacle(o: Dictionary) -> void:
+	var r := Rect2(float(o["x"]), float(o["y"]), float(o["w"]), float(o["h"]))
+	var kind := String(o.get("kind", "solid"))
+	var style := String(o.get("style", "rubble"))
+	if kind == "door":
+		var open := bool(o.get("open", false))
+		var fill := Color(0.55, 0.38, 0.22, 0.92) if not open else Color(0.35, 0.42, 0.38, 0.35)
+		var edge := Color(0.85, 0.62, 0.32, 1) if not open else Color(0.4, 0.55, 0.45, 0.7)
+		draw_rect(r, fill)
+		draw_rect(r, edge, false, 2.0)
+		# Latch tick.
+		var mid := r.get_center()
+		draw_circle(mid, 3.0, edge)
+		return
+	var fill := Color(0.28, 0.34, 0.42, 1)
+	var edge := Color(0.14, 0.18, 0.24, 1)
+	var accent := Color(0.4, 0.48, 0.55, 0.35)
+	match style:
+		"building":
+			fill = Color(0.32, 0.38, 0.48, 1)
+			edge = Color(0.18, 0.22, 0.3, 1)
+			accent = Color(0.55, 0.62, 0.72, 0.25)
+		"wall":
+			fill = Color(0.26, 0.3, 0.38, 1)
+			edge = Color(0.12, 0.15, 0.2, 1)
+			accent = Color(0.45, 0.5, 0.58, 0.2)
+		"prop":
+			fill = Color(0.42, 0.36, 0.28, 1)
+			edge = Color(0.22, 0.18, 0.12, 1)
+			accent = Color(0.7, 0.55, 0.32, 0.35)
+		"rubble":
+			fill = Color(0.3, 0.32, 0.3, 1)
+			edge = Color(0.16, 0.17, 0.16, 1)
+			accent = Color(0.5, 0.42, 0.3, 0.22)
+	draw_rect(r, fill)
+	draw_rect(r, edge, false, 1.5)
+	# Inner bevel / stripe so solids aren't flat slabs.
+	if r.size.x > 40.0 and r.size.y > 40.0:
+		draw_rect(Rect2(r.position + Vector2(4, 4), r.size - Vector2(8, 8)), accent, false, 1.0)
+	elif r.size.y >= r.size.x:
+		draw_line(r.position + Vector2(r.size.x * 0.35, 3), r.position + Vector2(r.size.x * 0.35, r.size.y - 3), accent, 2.0)
+	else:
+		draw_line(r.position + Vector2(3, r.size.y * 0.4), r.position + Vector2(r.size.x - 3, r.size.y * 0.4), accent, 2.0)
+
+
+func _draw_loot_container(c: Dictionary, cp: Vector2) -> void:
+	var kind := String(c.get("kind", "crate"))
+	if kind == "corpse":
+		draw_circle(cp, 12.0, Color(0.45, 0.16, 0.18, 0.9))
+		draw_circle(cp + Vector2(-4, -2), 5.0, Color(0.55, 0.22, 0.22, 0.85))
+		draw_arc(cp, 12.0, 0.0, TAU, 22, Color("e85454"), 1.8)
+		draw_string(ThemeDB.fallback_font, cp + Vector2(-10, 4), "×", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("ffb0b0"))
+		return
+	if kind == "drop_bag":
+		draw_circle(cp, 14.0, Color(0.78, 0.55, 0.22, 0.9))
+		draw_circle(cp + Vector2(0, -3), 8.0, Color(0.9, 0.7, 0.35, 0.55))
+		draw_arc(cp, 14.0, 0.0, TAU, 26, Color("e6b35a"), 2.2)
+		draw_string(ThemeDB.fallback_font, cp + Vector2(-14, 4), "BAG", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("fff0c8"))
+		return
+	if kind == "ground_loot":
+		# Colored item pile — reads as loot on the dirt, not another box.
+		var def_id := "scrap"
+		var contents: Array = c.get("contents", [])
+		if not contents.is_empty():
+			def_id = String(contents[0].get("def_id", "scrap"))
+		var col: Color = Items.get_item(def_id).get("color", Color("a8a79c"))
+		draw_circle(cp, 13.0, Color(col.r, col.g, col.b, 0.22))
+		draw_circle(cp + Vector2(-3, 2), 5.5, col.darkened(0.1))
+		draw_circle(cp + Vector2(4, -1), 4.5, col.lightened(0.08))
+		draw_circle(cp + Vector2(0, -4), 3.8, col)
+		draw_arc(cp, 10.0, 0.0, TAU, 20, Color(col.r, col.g, col.b, 0.75), 1.4)
+		return
+
+	var fill := Color(0.78, 0.58, 0.28, 0.98)
+	var edge := Color(0.45, 0.32, 0.14, 1)
+	var lid := Color(0.9, 0.72, 0.38, 0.95)
+	var tag := ""
+	match kind:
+		"ammo_crate":
+			fill = Color(0.82, 0.68, 0.38, 0.98)
+			edge = Color(0.5, 0.38, 0.16, 1)
+			lid = Color(0.92, 0.78, 0.45, 1)
+			tag = "A"
+		"med_cache":
+			fill = Color(0.82, 0.36, 0.36, 0.98)
+			edge = Color(0.5, 0.16, 0.16, 1)
+			lid = Color(0.95, 0.55, 0.55, 1)
+			tag = "+"
+		"weapon_case":
+			fill = Color(0.38, 0.55, 0.78, 0.98)
+			edge = Color(0.2, 0.34, 0.52, 1)
+			lid = Color(0.55, 0.72, 0.92, 1)
+			tag = "W"
+		"intel_safe":
+			fill = Color(0.32, 0.68, 0.78, 0.98)
+			edge = Color(0.16, 0.42, 0.52, 1)
+			lid = Color(0.55, 0.85, 0.95, 1)
+			tag = "S"
+		_:
+			tag = ""
+	# Body + raised lid + strap so crates read as objects, not UI tiles.
+	draw_rect(Rect2(cp.x - 12, cp.y - 8, 24, 18), fill)
+	draw_rect(Rect2(cp.x - 13, cp.y - 12, 26, 8), lid)
+	draw_rect(Rect2(cp.x - 12, cp.y - 8, 24, 18), edge, false, 1.6)
+	draw_rect(Rect2(cp.x - 13, cp.y - 12, 26, 8), edge.lightened(0.15), false, 1.2)
+	draw_line(Vector2(cp.x - 10, cp.y + 1), Vector2(cp.x + 10, cp.y + 1), edge.darkened(0.1), 2.0)
+	if tag != "":
+		draw_string(ThemeDB.fallback_font, cp + Vector2(-5, 5), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.9))
+	else:
+		# Common crate rivets.
+		draw_circle(cp + Vector2(-7, -4), 1.6, edge.lightened(0.25))
+		draw_circle(cp + Vector2(7, -4), 1.6, edge.lightened(0.25))
+		draw_circle(cp + Vector2(-7, 6), 1.6, edge.lightened(0.25))
+		draw_circle(cp + Vector2(7, 6), 1.6, edge.lightened(0.25))
+
+
 func _draw_actor_eyes(pos: Vector2, radius: float, facing: Vector2, pupil: Color, sclera: Color) -> void:
 	## Tiny facing eyes — readable at top-down scale without becoming a face sprite.
 	var f := facing.normalized() if facing.length_squared() > 1e-6 else Vector2.RIGHT
@@ -617,13 +746,25 @@ func _draw_minimap() -> void:
 		if bool(c["opened"]):
 			continue
 		var kind := String(c.get("kind", "crate"))
-		if kind != "corpse" and kind != "drop_bag":
+		# Keep minimap readable — only mark critical / loose finds.
+		if kind != "corpse" and kind != "drop_bag" and kind != "ground_loot" and kind != "weapon_case" and kind != "intel_safe":
 			continue
 		var cp: Vector2 = c["pos"]
-		var blip := Color("e85454") if kind == "corpse" else Color("e6b35a")
+		var blip := Color("e6b35a")
+		match kind:
+			"corpse":
+				blip = Color("e85454")
+			"drop_bag":
+				blip = Color("e6b35a")
+			"ground_loot":
+				blip = Color(0.75, 0.7, 0.45, 0.85)
+			"weapon_case":
+				blip = Color(0.45, 0.7, 0.95, 0.9)
+			"intel_safe":
+				blip = Color(0.45, 0.85, 0.95, 0.9)
 		if bool(c.get("elite", false)):
 			blip = Color("c9a0ff")
-		minimap.draw_circle(Vector2(cp.x * sx, cp.y * sy), 2.2 if kind == "drop_bag" else 2.0, blip)
+		minimap.draw_circle(Vector2(cp.x * sx, cp.y * sy), 2.2 if kind == "drop_bag" else 1.8, blip)
 	# Hostiles only when in vision — no god-mode radar (unless intel pulse).
 	var player: Dictionary = world["player"]
 	var obstacles: Array = world["obstacles"]

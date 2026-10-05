@@ -4,8 +4,8 @@ Repo: https://github.com/VerfiyNull/exfac (public)
 Default branch: **main**
 
 ## Latest build
-- Tag / title marker: **v0.3.3**
-- Release: https://github.com/VerfiyNull/exfac/releases/tag/v0.3.3
+- Tag / title marker: **v0.3.4**
+- Prior release: https://github.com/VerfiyNull/exfac/releases/tag/v0.3.3
 
 ## Clone (correct local layout)
 
@@ -21,7 +21,7 @@ Open the folder that contains `project.godot` (this `exfac` folder) in Godot 4.3
 
 Do **not** open a nested unzip like `exfac-main\exfac-main\` — that path has no git remote.
 
-Title bottom-right must show **v0.3.3**.
+Title bottom-right must show **v0.3.4**.
 
 ## Headless smoke
 

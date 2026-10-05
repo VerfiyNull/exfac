@@ -13,7 +13,7 @@ static func _R() -> GDScript:
 
 
 ## Keep in sync with RaidSim â€” duplicated so AI consts stay typed without host lookups.
-const EXTRACT_ALARM_RADIUS := 1200.0
+const EXTRACT_ALARM_RADIUS := 1400.0
 const HEAR_SPRINT_RANGE := 240.0
 const MELEE_SLOW_MULT := 0.4
 const ROAMER_SUPPRESS_SPREAD := 0.14
