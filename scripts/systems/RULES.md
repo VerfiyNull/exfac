@@ -7,7 +7,8 @@
 | `items.gd` | Catalog, stacks, loot rolls |
 | `meta.gd` | Credits, locker, loadout, requisition |
 | `skills.gd` | Skill ranks and raid modifiers |
-| `raid.gd` | Pure field sim (no nodes) |
+| `raid.gd` | Pure field sim hub (no nodes) |
+| `raid_roamers.gd` | Roamer / enforcer AI states |
 | `save.gd` | Local JSON persistence |
 | `ui_style.gd` | Quiet washes / button chrome |
 
