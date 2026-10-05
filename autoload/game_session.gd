@@ -2,7 +2,7 @@ extends Node
 ## Persistent solo session: meta economy + scene transitions + local save.
 
 ## Bump when shipping a build players should be able to spot on the title screen.
-const APP_VERSION := "0.3.2"
+const APP_VERSION := "0.3.3"
 const RAID_HISTORY_MAX := 8
 
 var meta: Dictionary = {}

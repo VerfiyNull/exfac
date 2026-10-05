@@ -277,8 +277,8 @@ func _refresh_hud() -> void:
 	var rch := float(player.get("reload_channel", 0.0))
 	var armed := Items.loadout_has_weapon(world.get("loadout", {}))
 	if not armed:
-		# Stamina on the FISTS line — proves this punch build is loaded (no AmmoSub dot).
-		ammo_label.text = "FISTS  %d" % int(ceil(float(player.get("stamina", 0.0))))
+		# Unarmed: weapon status only — never mag/reserve / AMMO chrome.
+		ammo_label.text = "FISTS"
 		ammo_sub.visible = false
 		ammo_sub.text = ""
 		ammo_sub.custom_minimum_size = Vector2.ZERO
