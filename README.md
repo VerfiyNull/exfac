@@ -12,8 +12,8 @@ Solo extraction shooter. **Standalone** — not UltraSim.
 
 1. `git pull origin main` — then open the **repo root** (the folder that contains `project.godot`, not an old unzip nested folder).
 2. In Godot: **Project → Reload Current Project** (or close + reopen) so scripts aren't stale.
-3. **F5** → title screen bottom-right should show **`v0.3.2`**. If that string is missing, you are not on this build.
-4. Punch check: HUD should read `FISTS  <stamina>` (a number, not a lone `·` under FISTS), and the field tip should say `Punch build: click · stamina · no shove`.
+3. **F5** → title screen bottom-right should show **`v0.3.3`**. If that string is missing, you are not on this build.
+4. Punch check: HUD should read **`FISTS`** (not mag/reserve / AMMO), click-only swing, stamina cost, no shove.
 
 ## Loop
 
