@@ -10,6 +10,9 @@ Solo extraction shooter. **Standalone** — not UltraSim.
 
 ## Run on your PC
 
+Latest on GitHub `main`: **v0.3.3** (https://github.com/VerfiyNull/exfac).
+
+
 1. `git pull origin main` — then open the **repo root** (the folder that contains `project.godot`, not an old unzip nested folder).
 2. In Godot: **Project → Reload Current Project** (or close + reopen) so scripts aren't stale.
 3. **F5** → title screen bottom-right should show **`v0.3.3`**. If that string is missing, you are not on this build.
